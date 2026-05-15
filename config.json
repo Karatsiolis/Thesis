@@ -1,0 +1,20 @@
+{
+  "seed": 42,
+
+  "av_ids": [1, 2],
+
+  "start_time": 5.0,
+  "end_time": 55.0,
+  "interval": 10.0,
+  "jitter": 0.5,
+
+  "min_subtasks": 2,
+  "max_subtasks": 3,
+
+  "D_in_range": [800000.0, 1500000.0],
+  "D_out": 20000.0,
+
+  "omega_range": [80000000.0, 180000000.0],
+
+  "tau_range": [80.0, 130.0]
+}

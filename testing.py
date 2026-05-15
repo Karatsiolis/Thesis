@@ -28,7 +28,9 @@ from dataclasses import dataclass, field
 from math import inf
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+import json
 import math
+import random
 import os
 import sys
 
@@ -230,83 +232,138 @@ SERVERS: Dict[int, MECServer] = {
     3: MECServer(bs_id=3, F_total=40e9, C_max=10),
 }
 
+# ── Automatic online task generation from JSON config ──────
 
-# ── Online task generation plan ────────────────────────────
+TASK_CONFIG_FILE = "config.json"
 
-TASK_TEMPLATES: List[TaskTemplate] = [
-    TaskTemplate(
-        task_id=1,
-        av_id=1,
-        generate_at=10.0,
-        tau=80.0,
-        subtasks=[
-            SubTaskSpec(
-                subtask_id=1,
-                D_in=1.5e6,
-                D_out=2.0e4,
-                omega=2.0e8,
-                relative_deadline=40.0,
-                order=0,
-            ),
-            SubTaskSpec(
-                subtask_id=2,
-                D_in=1.0e6,
-                D_out=2.0e4,
-                omega=1.5e8,
-                relative_deadline=80.0,
-                order=1,
-            ),
-        ],
-    ),
-    TaskTemplate(
-        task_id=2,
-        av_id=1,
-        generate_at=20.0,
-        tau=80.0,
-        subtasks=[
-            SubTaskSpec(
-                subtask_id=1,
-                D_in=1.0e6,
-                D_out=2.0e4,
-                omega=1.5e8,
-                relative_deadline=50.0,
-                order=0,
-            ),
-            SubTaskSpec(
-                subtask_id=2,
-                D_in=0.8e6,
-                D_out=2.0e4,
-                omega=1.0e8,
-                relative_deadline=80.0,
-                order=1,
-            ),
-        ],
-    ),
-    TaskTemplate(
-        task_id=3,
-        av_id=2,
-        generate_at=4.0,
-        tau=70.0,
-        subtasks=[
-            SubTaskSpec(
-                subtask_id=1,
-                D_in=1.2e6,
-                D_out=2.0e4,
-                omega=2.0e8,
-                relative_deadline=35.0,
-                order=0,
-            ),
-            SubTaskSpec(
-                subtask_id=2,
-                D_in=1.0e6,
-                D_out=2.0e4,
-                omega=1.5e8,
-                relative_deadline=70.0,
-                order=1,
-            ),
-        ],
-    ),
-]
+
+def resolve_config_file(filename: str) -> str:
+    """
+    Ψάχνει το JSON configuration αρχείο σε πιθανά σημεία.
+    """
+    candidates = [
+        BASE_DIR / filename,
+        BASE_DIR / "Thesis" / filename,
+        BASE_DIR / "sumo_scenario" / filename,
+    ]
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    raise FileNotFoundError(
+        f"Δεν βρέθηκε το {filename}. Έψαξα στα:\n"
+        + "\n".join(str(p) for p in candidates)
+    )
+
+
+def load_task_generation_config(filename: str) -> dict:
+    """
+    Φορτώνει τις ρυθμίσεις αυτόματης δημιουργίας tasks από JSON.
+    """
+    config_path = resolve_config_file(filename)
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def generate_task_templates_from_config(config: dict) -> List[TaskTemplate]:
+    """
+    Δημιουργεί αυτόματα TaskTemplates με βάση το JSON config.
+
+    Η δημιουργία είναι pseudo-random αλλά αναπαραγώγιμη,
+    επειδή χρησιμοποιείται σταθερό seed.
+    """
+    rng = random.Random(config.get("seed", 42))
+
+    av_ids = [int(av_id) for av_id in config["av_ids"]]
+
+    start_time = float(config["start_time"])
+    end_time = float(config["end_time"])
+    interval = float(config["interval"])
+    jitter = float(config.get("jitter", 0.0))
+
+    min_subtasks = int(config["min_subtasks"])
+    max_subtasks = int(config["max_subtasks"])
+
+    D_in_min, D_in_max = config["D_in_range"]
+    omega_min, omega_max = config["omega_range"]
+    tau_min, tau_max = config["tau_range"]
+
+    D_in_min = float(D_in_min)
+    D_in_max = float(D_in_max)
+    omega_min = float(omega_min)
+    omega_max = float(omega_max)
+    tau_min = float(tau_min)
+    tau_max = float(tau_max)
+
+    D_out = float(config["D_out"])
+
+    templates: List[TaskTemplate] = []
+
+    current_time = start_time
+
+    while current_time <= end_time:
+
+        for av_id in av_ids:
+
+            generate_at = current_time + rng.uniform(0.0, jitter)
+
+            # Αν λόγω jitter ξεπεράσει το τελικό generation time, το αγνοούμε
+            if generate_at > end_time:
+                continue
+
+            num_subtasks = rng.randint(min_subtasks, max_subtasks)
+
+            tau = rng.uniform(tau_min, tau_max)
+
+            subtasks: List[SubTaskSpec] = []
+
+            for order in range(num_subtasks):
+
+                # Το deadline κάθε subtask μοιράζεται σταδιακά μέσα στο συνολικό tau.
+                # Π.χ. αν tau=80 και έχουμε 2 subtasks:
+                # SubTask 1 deadline ≈ 40s
+                # SubTask 2 deadline ≈ 80s
+                relative_deadline = tau * ((order + 1) / num_subtasks)
+
+                subtasks.append(
+                    SubTaskSpec(
+                        subtask_id=order + 1,
+                        D_in=rng.uniform(D_in_min, D_in_max),
+                        D_out=D_out,
+                        omega=rng.uniform(omega_min, omega_max),
+                        relative_deadline=relative_deadline,
+                        order=order,
+                        earliest_offset=0.0,
+                    )
+                )
+
+            templates.append(
+                TaskTemplate(
+                    task_id=0,  # θα πάρει σωστό ID μετά την ταξινόμηση
+                    av_id=av_id,
+                    generate_at=generate_at,
+                    tau=tau,
+                    subtasks=subtasks,
+                )
+            )
+
+        current_time += interval
+
+    # Ταξινόμηση με βάση τον πραγματικό χρόνο δημιουργίας
+    templates.sort(key=lambda task: task.generate_at)
+
+    # Επαναρίθμηση ώστε το Task 1 να είναι αυτό που δημιουργείται πρώτο χρονικά
+    for new_task_id, template in enumerate(templates, start=1):
+        template.task_id = new_task_id
+
+    return templates
+
+
+TASK_TEMPLATES: List[TaskTemplate] = generate_task_templates_from_config(
+    load_task_generation_config(TASK_CONFIG_FILE)
+)
 
 
 # ============================================================
