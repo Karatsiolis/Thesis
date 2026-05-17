@@ -202,39 +202,9 @@ def resolve_sumo_file(filename: str) -> str:
 SUMOCFG = resolve_sumo_file("map.sumocfg")
 NET_FILE = resolve_sumo_file("map.net.xml")
 
+# ── Full simulation configuration from JSON ─────────────────
 
-# ── AV routes, lon/lat WGS84 ───────────────────────────────
-
-AV1_START = (21.788317, 40.302653)
-AV1_END   = (21.797086, 40.298967)
-
-AV2_START = (21.790000, 40.301000)
-AV2_END   = (21.796000, 40.299500)
-
-
-# ── BS/MEC positions, lon/lat ──────────────────────────────
-
-BS_COORDS: Dict[int, Tuple[float, float]] = {
-    1: (21.7900, 40.3020),
-    2: (21.7930, 40.3008),
-    3: (21.7958, 40.2993),
-}
-
-BS_COVERAGE_M = 150.0
-V2I_RATE = 2.0e7   # bps
-
-
-# ── MEC servers ────────────────────────────────────────────
-
-SERVERS: Dict[int, MECServer] = {
-    1: MECServer(bs_id=1, F_total=40e9, C_max=10),
-    2: MECServer(bs_id=2, F_total=40e9, C_max=10),
-    3: MECServer(bs_id=3, F_total=40e9, C_max=10),
-}
-
-# ── Automatic online task generation from JSON config ──────
-
-TASK_CONFIG_FILE = "config.json"
+CONFIG_FILE = "config.json"
 
 
 def resolve_config_file(filename: str) -> str:
@@ -257,9 +227,9 @@ def resolve_config_file(filename: str) -> str:
     )
 
 
-def load_task_generation_config(filename: str) -> dict:
+def load_json_config(filename: str) -> dict:
     """
-    Φορτώνει τις ρυθμίσεις αυτόματης δημιουργίας tasks από JSON.
+    Φορτώνει το ενιαίο JSON configuration αρχείο.
     """
     config_path = resolve_config_file(filename)
 
@@ -267,16 +237,138 @@ def load_task_generation_config(filename: str) -> dict:
         return json.load(f)
 
 
-def generate_task_templates_from_config(config: dict) -> List[TaskTemplate]:
+def load_vehicles_from_config(scenario_config: dict) -> Dict[int, dict]:
     """
-    Δημιουργεί αυτόματα TaskTemplates με βάση το JSON config.
+    Φορτώνει τα AVs από το scenario section του config.
+    """
+    vehicles_list = scenario_config["vehicles"]
+    declared_number = int(scenario_config["number_of_vehicles"])
 
-    Η δημιουργία είναι pseudo-random αλλά αναπαραγώγιμη,
-    επειδή χρησιμοποιείται σταθερό seed.
+    if declared_number != len(vehicles_list):
+        raise ValueError(
+            f"number_of_vehicles={declared_number}, "
+            f"αλλά στο vehicles υπάρχουν {len(vehicles_list)} οχήματα."
+        )
+
+    vehicles: Dict[int, dict] = {}
+
+    for vehicle in vehicles_list:
+        av_id = int(vehicle["av_id"])
+
+        if av_id in vehicles:
+            raise ValueError(f"Διπλό av_id στο config: {av_id}")
+
+        vehicles[av_id] = vehicle
+
+    return vehicles
+
+
+def load_bs_coords_from_config(scenario_config: dict) -> Dict[int, Tuple[float, float]]:
+    """
+    Φορτώνει τις lon/lat θέσεις των MEC/BS από το config.
+    """
+    bs_coords: Dict[int, Tuple[float, float]] = {}
+
+    for mec in scenario_config["mec_servers"]:
+        bs_id = int(mec["bs_id"])
+
+        if bs_id in bs_coords:
+            raise ValueError(f"Διπλό bs_id στο config: {bs_id}")
+
+        bs_coords[bs_id] = (
+            float(mec["lon"]),
+            float(mec["lat"]),
+        )
+
+    return bs_coords
+
+
+def load_mec_servers_from_config(scenario_config: dict) -> Dict[int, MECServer]:
+    """
+    Φορτώνει τα χαρακτηριστικά των MEC servers από το config.
+    """
+    servers: Dict[int, MECServer] = {}
+
+    for mec in scenario_config["mec_servers"]:
+        bs_id = int(mec["bs_id"])
+
+        if bs_id in servers:
+            raise ValueError(f"Διπλό MEC server με bs_id={bs_id}")
+
+        servers[bs_id] = MECServer(
+            bs_id=bs_id,
+            F_total=float(mec["F_total"]),
+            C_max=int(mec["C_max"]),
+        )
+
+    return servers
+
+
+DEFAULT_VEHICLE_COLORS = [
+    (0, 0, 255, 255),
+    (0, 200, 0, 255),
+    (255, 160, 0, 255),
+    (160, 0, 255, 255),
+    (0, 180, 180, 255),
+]
+
+
+def get_vehicle_color(av_id: int) -> Tuple[int, int, int, int]:
+    """
+    Επιστρέφει χρώμα οχήματος από το config.
+    Αν δεν υπάρχει color, δίνει default χρώμα.
+    """
+    vehicle = VEHICLES[av_id]
+
+    color = vehicle.get("color")
+
+    if color is None:
+        return DEFAULT_VEHICLE_COLORS[
+            (av_id - 1) % len(DEFAULT_VEHICLE_COLORS)
+        ]
+
+    if len(color) == 3:
+        color = [color[0], color[1], color[2], 255]
+
+    if len(color) != 4:
+        raise ValueError(
+            f"Το color για AV{av_id} πρέπει να έχει 3 ή 4 τιμές."
+        )
+
+    return tuple(int(c) for c in color)
+
+
+FULL_CONFIG = load_json_config(CONFIG_FILE)
+
+SCENARIO_CONFIG = FULL_CONFIG["scenario"]
+TASK_GENERATION_CONFIG = FULL_CONFIG["task_generation"]
+
+VEHICLES: Dict[int, dict] = load_vehicles_from_config(SCENARIO_CONFIG)
+
+BS_COORDS: Dict[int, Tuple[float, float]] = load_bs_coords_from_config(
+    SCENARIO_CONFIG
+)
+
+BS_COVERAGE_M = float(SCENARIO_CONFIG["bs_coverage_m"])
+
+V2I_RATE = float(SCENARIO_CONFIG.get("v2i_rate", 2.0e7))
+
+SERVERS: Dict[int, MECServer] = load_mec_servers_from_config(
+    SCENARIO_CONFIG
+)
+
+
+# ── Automatic online task generation from config ────────────
+
+def generate_task_templates_from_config(
+    config: dict,
+    av_ids: List[int],
+) -> List[TaskTemplate]:
+    """
+    Δημιουργεί αυτόματα TaskTemplates με βάση το task_generation section
+    του ενιαίου config.json.
     """
     rng = random.Random(config.get("seed", 42))
-
-    av_ids = [int(av_id) for av_id in config["av_ids"]]
 
     start_time = float(config["start_time"])
     end_time = float(config["end_time"])
@@ -314,17 +406,12 @@ def generate_task_templates_from_config(config: dict) -> List[TaskTemplate]:
                 continue
 
             num_subtasks = rng.randint(min_subtasks, max_subtasks)
-
             tau = rng.uniform(tau_min, tau_max)
 
             subtasks: List[SubTaskSpec] = []
 
             for order in range(num_subtasks):
 
-                # Το deadline κάθε subtask μοιράζεται σταδιακά μέσα στο συνολικό tau.
-                # Π.χ. αν tau=80 και έχουμε 2 subtasks:
-                # SubTask 1 deadline ≈ 40s
-                # SubTask 2 deadline ≈ 80s
                 relative_deadline = tau * ((order + 1) / num_subtasks)
 
                 subtasks.append(
@@ -341,7 +428,7 @@ def generate_task_templates_from_config(config: dict) -> List[TaskTemplate]:
 
             templates.append(
                 TaskTemplate(
-                    task_id=0,  # θα πάρει σωστό ID μετά την ταξινόμηση
+                    task_id=0,
                     av_id=av_id,
                     generate_at=generate_at,
                     tau=tau,
@@ -362,9 +449,9 @@ def generate_task_templates_from_config(config: dict) -> List[TaskTemplate]:
 
 
 TASK_TEMPLATES: List[TaskTemplate] = generate_task_templates_from_config(
-    load_task_generation_config(TASK_CONFIG_FILE)
+    config=TASK_GENERATION_CONFIG,
+    av_ids=sorted(VEHICLES.keys()),
 )
-
 
 # ============================================================
 # Helpers
@@ -788,10 +875,6 @@ def fail_task(task: Task, state: OnlineState, reason: str) -> None:
     )
 
 
-# ============================================================
-# SUMO setup
-# ============================================================
-
 def prepare_sumo():
     """
     Διαβάζει δίκτυο, βρίσκει edges, ξεκινά SUMO,
@@ -801,19 +884,51 @@ def prepare_sumo():
     """
     net = sumolib.net.readNet(NET_FILE)
 
+    # Μετατροπή BS/MEC lon/lat σε SUMO x/y coordinates
     bs_xy = {
         bs_id: net.convertLonLat2XY(lon, lat)
         for bs_id, (lon, lat) in BS_COORDS.items()
     }
 
-    av_edges = {
-        1: (find_edge(net, *AV1_START), find_edge(net, *AV1_END)),
-        2: (find_edge(net, *AV2_START), find_edge(net, *AV2_END)),
+    def prepare_sumo():
+        """
+        Διαβάζει δίκτυο, βρίσκει edges, ξεκινά SUMO,
+        εισάγει AVs και υπολογίζει ποιοι MEC servers βρίσκονται πάνω στη διαδρομή.
+
+        Δεν υπολογίζει predicted coverage times.
+        """
+    net = sumolib.net.readNet(NET_FILE)
+
+    # Μετατροπή BS/MEC lon/lat σε SUMO x/y coordinates
+    bs_xy = {
+        bs_id: net.convertLonLat2XY(lon, lat)
+        for bs_id, (lon, lat) in BS_COORDS.items()
     }
 
+    # Εύρεση start/end edges για όλα τα AVs που υπάρχουν στο config.json
+    av_edges: Dict[int, Tuple[object, object]] = {}
+
+    for av_id in sorted(VEHICLES.keys()):
+        vehicle = VEHICLES[av_id]
+
+        start_edge = find_edge(
+            net,
+            float(vehicle["start_lon"]),
+            float(vehicle["start_lat"]),
+        )
+
+        end_edge = find_edge(
+            net,
+            float(vehicle["end_lon"]),
+            float(vehicle["end_lat"]),
+        )
+
+        av_edges[av_id] = (start_edge, end_edge)
+
+    # Εκκίνηση SUMO
     traci.start(["sumo-gui", "-c", SUMOCFG, "--step-length", "0.1"])
 
-    # Προσθήκη BS/MEC ως POIs
+    # Προσθήκη BS/MEC ως POIs στο SUMO-GUI
     for bs_id, (x, y) in bs_xy.items():
         traci.poi.add(
             f"BS{bs_id}",
@@ -827,9 +942,12 @@ def prepare_sumo():
 
     route_mec_candidates_by_av: Dict[int, List[int]] = {}
 
-    # Εισαγωγή οχημάτων
+    # Εισαγωγή όλων των AVs που υπάρχουν στο config.json
     for av_id, (start_edge, end_edge) in av_edges.items():
-        stage = traci.simulation.findRoute(start_edge.getID(), end_edge.getID())
+        stage = traci.simulation.findRoute(
+            start_edge.getID(),
+            end_edge.getID(),
+        )
 
         if not stage.edges:
             raise RuntimeError(f"Δεν βρέθηκε διαδρομή για AV {av_id}")
@@ -847,11 +965,11 @@ def prepare_sumo():
             departSpeed="0",
         )
 
-        if av_id == 1:
-            traci.vehicle.setColor(veh_id, (0, 0, 255, 255))      # μπλε
-
-        elif av_id == 2:
-            traci.vehicle.setColor(veh_id, (0, 200, 0, 255))      # πράσινο
+        # Χρώμα οχήματος από το config.json
+        traci.vehicle.setColor(
+            veh_id,
+            get_vehicle_color(av_id),
+        )
 
         route_polyline = build_route_polyline(net, list(stage.edges))
 
