@@ -890,21 +890,6 @@ def prepare_sumo():
         for bs_id, (lon, lat) in BS_COORDS.items()
     }
 
-    def prepare_sumo():
-        """
-        Διαβάζει δίκτυο, βρίσκει edges, ξεκινά SUMO,
-        εισάγει AVs και υπολογίζει ποιοι MEC servers βρίσκονται πάνω στη διαδρομή.
-
-        Δεν υπολογίζει predicted coverage times.
-        """
-    net = sumolib.net.readNet(NET_FILE)
-
-    # Μετατροπή BS/MEC lon/lat σε SUMO x/y coordinates
-    bs_xy = {
-        bs_id: net.convertLonLat2XY(lon, lat)
-        for bs_id, (lon, lat) in BS_COORDS.items()
-    }
-
     # Εύρεση start/end edges για όλα τα AVs που υπάρχουν στο config.json
     av_edges: Dict[int, Tuple[object, object]] = {}
 
