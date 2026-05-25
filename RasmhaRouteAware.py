@@ -752,6 +752,37 @@ def compute_route_mec_candidates(
 # Route-aware target MEC decision without time prediction
 # ============================================================
 
+def av_route_distance(
+    av_pos: Tuple[float, float],
+    route_polyline: List[Tuple[float, float]],
+) -> float:
+    cumulative = route_cumulative_distances(route_polyline)
+    best_route_dist = 0.0
+    best_geom_dist = inf
+
+    for i in range(1, len(route_polyline)):
+        ax, ay = route_polyline[i - 1]
+        bx, by = route_polyline[i]
+        px, py = av_pos
+        abx, aby = bx - ax, by - ay
+        ab_len_sq = abx * abx + aby * aby
+
+        if ab_len_sq == 0.0:
+            t = 0.0
+        else:
+            t = ((px - ax) * abx + (py - ay) * aby) / ab_len_sq
+            t = max(0.0, min(1.0, t))
+
+        closest = (ax + t * abx, ay + t * aby)
+        geom_dist = dist(av_pos, closest)
+
+        if geom_dist < best_geom_dist:
+            best_geom_dist = geom_dist
+            best_route_dist = cumulative[i - 1] + t * dist(route_polyline[i - 1], route_polyline[i])
+
+    return best_route_dist
+
+
 def choose_route_aware_target_mec(
     task: Task,
     subtask: SubTask,
@@ -759,52 +790,44 @@ def choose_route_aware_target_mec(
     route_candidates: List[int],
     passed_bs: set[int],
     state: OnlineState,
+    current_av_pos: Tuple[float, float],
+    route_polyline: List[Tuple[float, float]],
+    avg_speed: float,
+    bs_xy: Dict[int, Tuple[float, float]],
+    real_reachable_bs: List[int],
+    dependency_ready_time: float,
 ) -> Optional[int]:
-    """
-    Επιλέγει target MEC για το επόμενο ready subtask, χωρίς predicted coverage times.
+    current_av_dist = av_route_distance(current_av_pos, route_polyline)
 
-    Το AV ξέρει μόνο:
-      - τη route του,
-      - τη σειρά των MEC servers πάνω στη route,
-      - ποιοι MEC έχουν ήδη προσπεραστεί,
-      - τα χαρακτηριστικά υπολογισμού/ρυθμού μετάδοσης.
-
-    Κριτήριο:
-      - κρατάμε μόνο MEC που δεν έχουν προσπεραστεί,
-      - απορρίπτουμε MEC που δεν προλαβαίνουν ούτε με άμεσο start,
-      - επιλέγουμε τον MEC με το μικρότερο subtask delay,
-      - σε ισοβαθμία προτιμάται ο πιο κοντινός επόμενος MEC στη route.
-
-    Δεν κάνει πρόβλεψη enter_time/exit_time.
-    """
     best_bs: Optional[int] = None
-    best_score = inf
-    best_delay = inf
+    best_estimated_finish = inf
 
-    for route_index, bs_id in enumerate(route_candidates):
+    for bs_id in route_candidates:
         if bs_id in passed_bs:
             continue
 
         server = SERVERS[bs_id]
         delay, _, _, _ = total_subtask_delay(subtask, server, V2I_RATE)
 
-        # Lower-bound feasibility: αν δεν προλαβαίνει ούτε με άμεσο start,
-        # τότε σίγουρα δεν θα προλάβει αν περιμένει να φτάσει στο BS.
-        lower_bound_finish = current_time + delay
+        if bs_id in real_reachable_bs:
+            estimated_arrival = current_time
+        else:
+            _, bs_route_dist = closest_route_distance_to_bs(route_polyline, bs_xy[bs_id])
+            bs_entry_dist = max(current_av_dist, bs_route_dist - BS_COVERAGE_M)
+            remaining_dist = max(0.0, bs_entry_dist - current_av_dist)
+            estimated_arrival = current_time + remaining_dist / avg_speed
 
-        if lower_bound_finish > subtask.deadline:
+        estimated_start = max(estimated_arrival, dependency_ready_time)
+        estimated_finish = estimated_start + delay
+
+        if estimated_finish > subtask.deadline:
             continue
 
-        if lower_bound_finish > task.generated_at + task.tau:
+        if estimated_finish > task.generated_at + task.tau:
             continue
 
-        # Μικρή ποινή route_index μόνο για tie-breaking. Δεν είναι χρόνος.
-        # Έτσι αν δύο MEC έχουν σχεδόν ίδιο delay, προτιμάται ο πιο κοντινός στη route.
-        score = delay + route_index * 1e-9
-
-        if score < best_score:
-            best_score = score
-            best_delay = delay
+        if estimated_finish < best_estimated_finish:
+            best_estimated_finish = estimated_finish
             best_bs = bs_id
 
     return best_bs
@@ -1056,6 +1079,8 @@ def prepare_sumo():
         )
 
     route_mec_candidates_by_av: Dict[int, List[int]] = {}
+    av_route_polylines: Dict[int, List[Tuple[float, float]]] = {}
+    av_travel_times: Dict[int, float] = {}
 
     # Εισαγωγή όλων των AVs που υπάρχουν στο config.json
     for av_id, (start_edge, end_edge) in av_edges.items():
@@ -1095,6 +1120,8 @@ def prepare_sumo():
         )
 
         route_mec_candidates_by_av[av_id] = route_candidates
+        av_route_polylines[av_id] = route_polyline
+        av_travel_times[av_id] = float(stage.travelTime)
 
         print(
             f"AV {av_id} inserted | "
@@ -1106,7 +1133,7 @@ def prepare_sumo():
             f"  Route MEC candidates for AV{av_id}: {route_candidates}"
         )
 
-    return bs_xy, av_edges, route_mec_candidates_by_av
+    return bs_xy, av_edges, route_mec_candidates_by_av, av_route_polylines, av_travel_times
 
 
 # ============================================================
@@ -1125,7 +1152,12 @@ def run_online_sumo_rasmha() -> OnlineState:
     """
     print("── Online SUMO + Route-Aware Target MEC RASMHA simulation ───────────────────")
 
-    bs_xy, av_edges, route_mec_candidates_by_av = prepare_sumo()
+    bs_xy, av_edges, route_mec_candidates_by_av, av_route_polylines, av_travel_times = prepare_sumo()
+
+    av_avg_speeds: Dict[int, float] = {}
+    for av_id, polyline in av_route_polylines.items():
+        total_length = route_cumulative_distances(polyline)[-1]
+        av_avg_speeds[av_id] = total_length / av_travel_times[av_id]
 
     state = OnlineState(
         mec_load={bs_id: 0 for bs_id in SERVERS}
@@ -1205,6 +1237,8 @@ def run_online_sumo_rasmha() -> OnlineState:
             current_reachable: Dict[int, List[int]] = {
                 av_id: [] for av_id in av_edges
             }
+            
+            av_positions: Dict[int, Tuple[float, float]] = {}
 
             for av_id in av_edges:
                 veh_id = f"av{av_id}"
@@ -1213,6 +1247,8 @@ def run_online_sumo_rasmha() -> OnlineState:
                     continue
 
                 pos = traci.vehicle.getPosition(veh_id)
+
+                av_positions[av_id] = pos
 
                 for bs_id, bs_pos in bs_xy.items():
                     inside = dist(pos, bs_pos) <= BS_COVERAGE_M
@@ -1337,6 +1373,12 @@ def run_online_sumo_rasmha() -> OnlineState:
                         route_candidates=route_candidates,
                         passed_bs=passed_bs,
                         state=state,
+                        current_av_pos=av_positions.get(av_id, (0.0, 0.0)),
+                        route_polyline=av_route_polylines[av_id],
+                        avg_speed=av_avg_speeds[av_id],
+                        bs_xy=bs_xy,
+                        real_reachable_bs=real_reachable_bs,
+                        dependency_ready_time=state.last_finish.get(task_id, task.generated_at),
                     )
 
                     if target_bs is None:
