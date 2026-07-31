@@ -73,17 +73,14 @@ def _load_module(module_name: str, path: Path):
 
 
 ALGORITHM_FILE = _find_file([
-    "algorithm_original.py",
-    "algorithm.py",
-    "algorithm(4).py",
+    "algorithm.py"
 ])
 
 # The comparison must use the current recovery-enabled RASMHA implementation
 # as the authoritative source of the shared scenario and workload.  Both names
 # are accepted so the file works before or after removing the download suffix.
 RASMHA_FILE = _find_file([
-    "RasmhaLast_recovery.py",
-    "RasmhaLast_recovery(1).py",
+    "RasmhaLast_recovery.py"
 ])
 
 CMHA = _load_module("original_cmha_algorithm", ALGORITHM_FILE)
