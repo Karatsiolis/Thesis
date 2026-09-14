@@ -366,6 +366,9 @@ BS_COVERAGE_M = float(SCENARIO_CONFIG["bs_coverage_m"])
 
 V2I_RATE = float(SCENARIO_CONFIG.get("v2i_rate", 2.0e7))
 
+MAX_SIM_TIME = float(SCENARIO_CONFIG.get("max_sim_time", 200.0))
+WAIT_LOG_PERIOD = float(SCENARIO_CONFIG.get("wait_log_period", 5.0))
+
 SERVERS: Dict[int, MECServer] = load_mec_servers_from_config(
     SCENARIO_CONFIG
 )
@@ -1234,9 +1237,6 @@ def run_online_sumo_rasmha() -> OnlineState:
         av_id: set()
         for av_id in av_edges
     }
-
-    MAX_SIM_TIME = 140.0
-    WAIT_LOG_PERIOD = 5.0
 
     try:
         while traci.simulation.getTime() <= MAX_SIM_TIME:

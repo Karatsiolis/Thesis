@@ -169,8 +169,8 @@ TX_POWER_MIN = float(TX_POWER_MIN)
 TX_POWER_MAX = float(TX_POWER_MAX)
 
 TASK_SEED = int(RASMHA.TASK_GENERATION_CONFIG.get("seed", 42))
-MAX_SIM_TIME = float(COMPARISON_CONFIG.get("max_sim_time", 140.0))
-WAIT_LOG_PERIOD = float(COMPARISON_CONFIG.get("wait_log_period", 5.0))
+MAX_SIM_TIME = float(getattr(RASMHA, "MAX_SIM_TIME", 140.0))
+WAIT_LOG_PERIOD = float(getattr(RASMHA, "WAIT_LOG_PERIOD", 5.0))
 
 if not 0.0 <= CACHE_HIT_RATE <= 1.0:
     raise ValueError("cache_hit_rate must be between 0 and 1")
@@ -745,6 +745,11 @@ def start_pending_plans(
             state.mec_load[capacity_bs] = state.mec_load.get(capacity_bs, 0) + 1
 
         finish_time = current_time + plan.exact_delay
+
+        # Καταγράφεται μόνο ως διαγνωστική χρονοσφραγίδα (πότε ολοκληρώνεται το
+        # T^t_ij της Εξ. 7). Δεν αποτελεί κριτήριο αποτυχίας: το άρθρο δεν
+        # ορίζει τέτοιο κριτήριο - βλ. αναλυτικό σχόλιο στην
+        # update_running_executions().
         upload_end: Optional[float] = None
         if plan.mode == "MIGRATION" and not plan.cache_hit:
             upload_end = current_time + plan.upload_time
@@ -794,22 +799,28 @@ def update_running_executions(
             )
             continue
 
-        if (
-            execution.upload_end_time is not None
-            and current_time >= execution.upload_end_time
-            and plan.access_bs not in current_reachable.get(plan.av_id, [])
-        ):
-            fail_task(
-                task,
-                state,
-                current_time,
-                reason=(
-                    f"το upload δεν ολοκληρώθηκε πριν το AV{plan.av_id} "
-                    f"φύγει από το Access BS{plan.access_bs}"
-                ),
-            )
-            continue
-
+        # ΣΗΜΕΙΩΣΗ ΠΙΣΤΟΤΗΤΑΣ ΣΤΟ ΑΡΘΡΟ (Lai et al., Ad Hoc Networks 156/2024):
+        #
+        # Εδώ υπήρχε έλεγχος που ακύρωνε ένα MIGRATION αν το AV είχε βγει από
+        # την κάλυψη του Access BS τη στιγμή ολοκλήρωσης του upload. Ο έλεγχος
+        # αυτός ΔΕΝ προβλέπεται πουθενά στο μοντέλο του άρθρου και μάλιστα
+        # αντιβαίνει στη λογική του:
+        #
+        #   - Ο περιορισμός C4 (§3.6.3) ορίζει ότι το migration ενεργοποιείται
+        #     ΑΚΡΙΒΩΣ όταν T^z_ij >= T^w_ij, δηλαδή όταν ο χρόνος επεξεργασίας
+        #     στο Access BS υπερβαίνει τον χρόνο παραμονής του MU εκεί. Το
+        #     upload (T^t_ij) είναι συστατικό του T^z_ij. Άρα το άρθρο ΠΕΡΙΜΕΝΕΙ
+        #     το όχημα να φεύγει από το Access BS κατά τη διάρκεια της
+        #     διεκπεραίωσης· αυτός ακριβώς είναι ο λόγος ύπαρξης του migration.
+        #
+        #   - Η Εξ. (16) ήδη ενσωματώνει πλήρως αυτή την κινητικότητα:
+        #     T^h_ik = max{ T^t_ij + T^t_jk + T^c_ik + T^r_ik , T^w_ij + T^r_ik }
+        #     Ο δεύτερος όρος δηλώνει ρητά ότι το MU λαμβάνει το αποτέλεσμα
+        #     μόνο αφού εισέλθει στην κάλυψη του Migration BS.
+        #
+        # Επομένως η μοναδική συνθήκη επιτυχίας που ορίζει το άρθρο για το
+        # migration είναι η κάλυψη στο Migration BS τη στιγμή επιστροφής του
+        # αποτελέσματος - κάτι που ελέγχεται παρακάτω. Ο έλεγχος αφαιρέθηκε.
         if current_time < execution.finish_time:
             continue
 
@@ -827,17 +838,29 @@ def update_running_executions(
                 continue
 
         elif plan.mode == "MIGRATION":
+            # ΣΗΜΕΙΩΣΗ ΠΙΣΤΟΤΗΤΑΣ ΣΤΟ ΑΡΘΡΟ (§3.5.2, περιπτώσεις 4 & 5):
+            #
+            # "since the MU can only receive the task computation result when
+            #  entering the Migration BS service coverage, the total delay is
+            #  the sum of the computation result return delay and the residence
+            #  time of MU i in Access BS" -> Εξ. (15) και Εξ. (16).
+            #
+            # Το άρθρο δηλαδή ΑΝΑΜΕΝΕΙ την είσοδο του MU στην κάλυψη του
+            # Migration BS· δεν ακυρώνει την εργασία. Ο δεύτερος όρος του max
+            # στην Εξ. (16), T^w_ij + T^r_ik, είναι ακριβώς αυτή η αναμονή.
+            #
+            # Στο μοντέλο του άρθρου (Fig. 1) οι κυψέλες είναι εφαπτόμενες, άρα
+            # "έξοδος από Access BS" == "είσοδος σε Migration BS" και ο όρος
+            # T^w_ij αρκεί. Στο σενάριο SUMO της παρούσας εργασίας οι καλύψεις
+            # ΔΕΝ είναι συνεχείς (υπάρχει κενό μεταξύ BS2 και BS3), οπότε η
+            # πραγματική στιγμή εισόδου είναι η πιστή γενίκευση του T^w_ij.
             if plan.migration_bs not in current_reachable.get(plan.av_id, []):
-                fail_task(
-                    task,
-                    state,
-                    current_time,
-                    reason=(
-                        f"το αποτέλεσμα δεν επέστρεψε επειδή το AV{plan.av_id} "
-                        f"δεν βρίσκεται στο Migration BS{plan.migration_bs}"
-                    ),
-                )
                 continue
+
+            # Πραγματική στιγμή παράδοσης: γενίκευση της Εξ. (16) με τον
+            # μετρημένο χρόνο εισόδου αντί του υποτιθέμενου T^w_ij.
+            if current_time > execution.finish_time:
+                execution.finish_time = current_time
 
         state.running_executions.remove(execution)
         complete_execution(execution, state)
