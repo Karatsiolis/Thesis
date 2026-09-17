@@ -1121,7 +1121,7 @@ def prepare_sumo():
         av_edges[av_id] = (start_edge, end_edge)
 
     # Εκκίνηση SUMO
-    traci.start(["sumo-gui", "-c", SUMOCFG, "--step-length", "0.1"])
+    traci.start(["sumo-gui", "-c", SUMOCFG, "--step-length", "0.01"])
 
     # Προσθήκη BS/MEC ως POIs στο SUMO-GUI
     for bs_id, (x, y) in bs_xy.items():

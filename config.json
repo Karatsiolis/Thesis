@@ -1,103 +1,113 @@
 {
   "scenario": {
     "number_of_vehicles": 6,
-
     "vehicles": [
       {
         "av_id": 1,
-        "start_lon": 21.788379,
-        "start_lat": 40.302917,
-        "end_lon": 21.797110,
-        "end_lat": 40.298964,
+        "start_lon": 21.7865,
+        "start_lat": 40.2985,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [0, 0, 255, 255]
       },
       {
         "av_id": 2,
-        "start_lon": 21.788254,
-        "start_lat": 40.302114,
-        "end_lon": 21.797110,
-        "end_lat": 40.298964,
+        "start_lon": 21.7885,
+        "start_lat": 40.3025,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [0, 200, 0, 255]
       },
       {
         "av_id": 3,
-        "start_lon": 21.788243,
-        "start_lat": 40.301303,
-        "end_lon": 21.79711,
-        "end_lat": 40.298964,
+        "start_lon": 21.7885,
+        "start_lat": 40.3035,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [255, 128, 0, 255]
       },
       {
         "av_id": 4,
-        "start_lon": 21.788719,
-        "start_lat": 40.300627,
-        "end_lon": 21.79711,
-        "end_lat": 40.298964,
+        "start_lon": 21.7895,
+        "start_lat": 40.2985,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [200, 0, 200, 255]
       },
       {
         "av_id": 5,
-        "start_lon": 21.789566,
-        "start_lat": 40.300468,
-        "end_lon": 21.79711,
-        "end_lat": 40.298964,
+        "start_lon": 21.7905,
+        "start_lat": 40.2985,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [0, 200, 200, 255]
       },
       {
         "av_id": 6,
-        "start_lon": 21.790597,
-        "start_lat": 40.300335,
-        "end_lon": 21.79711,
-        "end_lat": 40.298964,
+        "start_lon": 21.7925,
+        "start_lat": 40.3035,
+        "end_lon": 21.797086,
+        "end_lat": 40.298967,
         "color": [255, 0, 0, 255]
       }
     ],
-
     "bs_coverage_m": 100.0,
     "v2i_rate": 10000000.0,
-
     "mec_servers": [
       {
         "bs_id": 1,
-        "lon": 21.788254,
-        "lat": 40.301934,
+        "lon": 21.79,
+        "lat": 40.302,
         "F_total": 30000000000.0,
         "C_max": 5
       },
       {
         "bs_id": 2,
-        "lon": 21.789220,
-        "lat": 40.300420,
+        "lon": 21.793,
+        "lat": 40.3008,
         "F_total": 40000000000.0,
         "C_max": 5
       },
       {
         "bs_id": 3,
-        "lon": 21.791609,
-        "lat": 40.299890,
+        "lon": 21.7958,
+        "lat": 40.2993,
         "F_total": 50000000000.0,
         "C_max": 5
       },
       {
         "bs_id": 4,
-        "lon": 21.793989,
-        "lat": 40.299263,
+        "lon": 21.7934,
+        "lat": 40.2986,
         "F_total": 60000000000.0,
         "C_max": 5
       },
       {
         "bs_id": 5,
-        "lon": 21.796209,
-        "lat": 40.299064,
+        "lon": 21.7894,
+        "lat": 40.2982,
         "F_total": 70000000000.0,
+        "C_max": 5
+      },
+      {
+        "bs_id": 6,
+        "lon": 21.7898,
+        "lat": 40.2998,
+        "F_total": 45000000000.0,
+        "C_max": 5
+      },
+      {
+        "bs_id": 7,
+        "lon": 21.7874,
+        "lat": 40.3022,
+        "F_total": 55000000000.0,
         "C_max": 5
       }
     ],
 
-    "max_sim_time": 200,
+    "max_sim_time": 250,
     "wait_log_period": 5
   },
-
   "task_generation": {
     "seed": 42,
 
@@ -113,8 +123,8 @@
     "D_out": 200000.0,
 
     "omega_range": [30000000000.0, 70000000000.0],
-
-    "tau_range": [60.0, 100.0]
+    
+    "tau_range": [160.0, 240.0]
   },
 
   "cmha_comparison": {
@@ -122,7 +132,7 @@
     "bs_to_bs_rate": 100000000.0,
     "cache_hit_rate": 0.0,
     "num_task_types": 10,
-    "local_cpu_range": [500000000, 800000000],
+    "local_cpu_range": [500000000.0, 800000000.0],
     "tx_power_range": [0.1, 0.2]
   }
 }
