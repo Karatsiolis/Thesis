@@ -44,10 +44,7 @@ import os
 import sys
 
 
-# ============================================================
-# SUMO imports
-# ============================================================
-
+#SUMO imports
 if "SUMO_HOME" in os.environ:
     sys.path.append(os.path.join(os.environ["SUMO_HOME"], "tools"))
 else:
@@ -57,10 +54,7 @@ import traci
 import sumolib
 
 
-# ============================================================
-# Data structures
-# ============================================================
-
+#Data structures
 @dataclass
 class SubTask:
     """
@@ -185,10 +179,7 @@ class OnlineState:
     last_wait_log: Dict[Tuple[int, int], float] = field(default_factory=dict)
 
 
-# ============================================================
-# Scenario configuration
-# ============================================================
-
+#Scenario configuration
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -469,10 +460,7 @@ TASK_TEMPLATES: List[TaskTemplate] = generate_task_templates_from_config(
     av_ids=sorted(VEHICLES.keys()),
 )
 
-# ============================================================
-# Helpers
-# ============================================================
-
+#Helpers
 def dist(p1, p2) -> float:
     """
     Euclidean distance σε SUMO x/y coordinates, δηλαδή σε μέτρα.
@@ -568,10 +556,7 @@ def create_task_from_template(template: TaskTemplate, current_time: float) -> Ta
     )
 
 
-# ============================================================
-# Route-aware MEC candidate helpers
-# ============================================================
-
+#Route-aware MEC candidate helpers
 def build_route_polyline(net, edge_ids: List[str]) -> List[Tuple[float, float]]:
     """
     Χτίζει polyline της διαδρομής από τα shapes των SUMO edges.
@@ -755,10 +740,7 @@ def compute_route_mec_candidates(
     return [bs_id for _, bs_id in candidates_with_route_distance]
 
 
-# ============================================================
-# Route-aware target MEC decision without time prediction
-# ============================================================
-
+#Route-aware target MEC decision without time prediction
 def av_route_distance(
     av_pos: Tuple[float, float],
     route_polyline: List[Tuple[float, float]],
