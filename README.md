@@ -1,10 +1,5 @@
 # RASMHA — Route-Aware MEC Task Offloading for Autonomous Vehicles
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
-![SUMO](https://img.shields.io/badge/SUMO-1.26-2E7D32)
-![TraCI](https://img.shields.io/badge/TraCI-online%20control-555555)
-![Thesis](https://img.shields.io/badge/type-diploma%20thesis-1f6feb)
-
 This repository contains the implementation and experimental evaluation of **RASMHA**, a route-aware, deadline-aware mechanism for offloading computation tasks from autonomous vehicles (AVs) to Mobile Edge Computing (MEC) servers over V2I links. RASMHA exploits the vehicle's known route to decide in advance where each subtask should run. The simulation runs online on a real road network of Kozani, Greece (OpenStreetMap) through SUMO/TraCI, and RASMHA is benchmarked against **CMHA** (Lai et al., 2024) under the **same scenario, vehicles and task workload**.
 
 The code was developed as part of a diploma thesis.
