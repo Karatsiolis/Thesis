@@ -51,8 +51,10 @@
         "color": [255, 0, 0, 255]
       }
     ],
+
     "bs_coverage_m": 100.0,
     "v2i_rate": 10000000.0,
+    
     "mec_servers": [
       {
         "bs_id": 1,
