@@ -1,3 +1,18 @@
+"""
+Implementation of the CMHA algorithm (Cache-assist Mobility-aware Heuristic
+Algorithm) from: Lai et al., "Mobility-aware task offloading in MEC with
+task migration and result caching", Ad Hoc Networks 156, 2024.
+Used as the baseline for the comparison with RASMHA.
+
+Contents:
+  - the delay model (Eq. 7-16) and the energy model (Eq. 18-19),
+  - the cost functions: alpha * delay + (1 - alpha) * energy,
+  - Algorithm 1 (CMHA): greedy choice between local execution,
+    offloading to the Access BS and migration to the Migration BS,
+  - the flow of Algorithm 2, with placeholders for the parts that are not
+    implemented (OPTA/ILP solver, trajectory prediction).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,41 +20,34 @@ from math import inf
 from typing import Dict, List, Tuple, Literal, Optional
 
 
-# ============================================================
-# Data structures
-# ============================================================
+#---------------------------------------------------------
+#Data structures
+#---------------------------------------------------------
 
 @dataclass
 class Task:
-    """
-    u_i = {D_in, D_out, omega, task_type, tau}
-    """
+    """Task u_i of mobile user (MU) i."""
     task_id: int
     D_in: float          # input data size (bits)
-    D_out: float         # result data size (bits)
+    D_out: float         # result size (bits)
     omega: float         # required CPU cycles
     task_type: int       # task type
-    tau: float           # maximum allowable delay
-    F_u: float           # local CPU frequency of MU i
-    P_tx: float          # transmission power of MU i
+    tau: float           # maximum allowed delay
+    F_u: float           # CPU frequency of the MU (local execution)
+    P_tx: float          # transmission power of the MU
 
 
 @dataclass
 class MECServer:
-    """
-    MEC server on BS j
-    """
+    """MEC server at base station (BS) j."""
     bs_id: int
-    F_total: float       # total CPU frequency of MEC server
-    C_max: int           # max simultaneous tasks
+    F_total: float       # total CPU frequency of the server
+    C_max: int           # maximum number of concurrent tasks
 
     @property
     def f_alloc(self) -> float:
-        """
-        Article assumption:
-        MEC computational resources are evenly allocated to the maximum
-        number of tasks that the MEC server can process simultaneously.
-        """
+        # Paper assumption: MEC resources are split equally among the
+        # C_max tasks the server can serve at the same time.
         if self.C_max <= 0:
             raise ValueError(f"C_max must be > 0 for BS {self.bs_id}")
         return self.F_total / self.C_max
@@ -47,48 +55,47 @@ class MECServer:
 
 @dataclass
 class SystemInputs:
+    """All problem inputs for one run of the algorithm."""
     tasks: List[Task]
     servers: Dict[int, MECServer]
 
-    # V[(i, j, k)] = 1:
-    # for task i, access BS = j and migration BS = k
+    # V[(i, j, k)] = 1: for task i, Access BS = j and Migration BS = k
     V: Dict[Tuple[int, int, int], int]
 
     # Q[(i, j)] = 1: cache hit for task i at BS j
     Q: Dict[Tuple[int, int], int]
 
-    # T_w[(i, j)] = residence time of MU i at access BS j
+    # T_w[(i, j)]: residence time of MU i in the coverage of Access BS j
     T_w: Dict[Tuple[int, int], float]
 
-    # R_mu_bs[(i, j)] = rate between MU i and BS j
+    # R_mu_bs[(i, j)]: transmission rate between MU i and BS j
     R_mu_bs: Dict[Tuple[int, int], float]
 
-    # R_bs_bs[(j, k)] = rate between BS j and BS k
+    # R_bs_bs[(j, k)]: transmission rate between BS j and BS k
     R_bs_bs: Dict[Tuple[int, int], float]
 
-    alpha: float
-    epsilon: float = 1.25e-26
+    alpha: float                 # weight of delay versus energy
+    epsilon: float = 1.25e-26    # energy coefficient of the processor
 
 
 @dataclass
 class AlgorithmOutput:
-    Y: Dict[Tuple[int, int], int]
-    Z: Dict[Tuple[int, int, int], int]
-    D: Dict[int, float]
+    """Decisions and cost returned by the algorithm."""
+    Y: Dict[Tuple[int, int], int]           # y_ij = 1: offloading via Access BS j (0: local)
+    Z: Dict[Tuple[int, int, int], int]      # z_ijk = 1: migration from j to k
+    D: Dict[int, float]                     # cost per task
     total_cost: float
 
 
-# ============================================================
-# Helpers
-# ============================================================
+#---------------------------------------------------------
+#Helper functions
+#---------------------------------------------------------
 
 def get_access_and_migration_bs(
     V: Dict[Tuple[int, int, int], int],
     task_id: int
 ) -> Tuple[int, int]:
-    """
-    Returns (j, k) such that v_ijk = 1.
-    """
+    """Returns (j, k): the Access BS and the Migration BS of the task (v_ijk = 1)."""
     for (i, j, k), value in V.items():
         if i == task_id and value == 1:
             return j, k
@@ -102,47 +109,48 @@ def get_task_by_id(tasks: List[Task], task_id: int) -> Task:
     raise ValueError(f"Task {task_id} not found")
 
 
-# ============================================================
-# Delay model
-# ============================================================
+#---------------------------------------------------------
+#Delay model
+#---------------------------------------------------------
 
 def upload_delay(task: Task, R_ij: float) -> float:
-    # Eq. (7)
+    # Eq. (7): sending the input data from the MU to the BS
     return task.D_in / R_ij
 
 
 def local_compute_delay(task: Task) -> float:
-    # Eq. (8)
+    # Eq. (8): local execution on the MU
     return task.omega / task.F_u
 
 
 def mec_compute_delay(task: Task, server: MECServer) -> float:
-    # Eq. (9)
+    # Eq. (9): execution on the MEC server
     return task.omega / server.f_alloc
 
 
 def inter_bs_delay(task: Task, R_jk: float) -> float:
-    # Eq. (11)
+    # Eq. (11): transferring the input data from BS j to BS k
     return task.D_in / R_jk
 
 
 def return_delay(task: Task, R_ij: float) -> float:
-    # Eq. (12)
+    # Eq. (12): returning the result from the BS to the MU
     return task.D_out / R_ij
 
 
 def access_cache_hit_delay(task: Task, R_ij: float) -> float:
-    # Eq. (13)
+    # Eq. (13): cache hit at the Access BS -> only the result return
     return return_delay(task, R_ij)
 
 
 def access_cache_miss_delay(task: Task, server: MECServer, R_ij: float) -> float:
-    # Eq. (14)
+    # Eq. (14): cache miss at the Access BS -> upload + computation + return
     return upload_delay(task, R_ij) + mec_compute_delay(task, server) + return_delay(task, R_ij)
 
 
 def migration_cache_hit_delay(task: Task, R_ik: float, T_w_ij: float) -> float:
-    # Eq. (15)
+    # Eq. (15): cache hit at the Migration BS -> the MU receives the result
+    # after leaving the Access BS (T_w_ij) and entering the Migration BS
     return return_delay(task, R_ik) + T_w_ij
 
 
@@ -154,7 +162,9 @@ def migration_cache_miss_delay(
     R_ik: float,
     T_w_ij: float,
 ) -> float:
-    # Eq. (16)
+    # Eq. (16): cache miss at the Migration BS -> the maximum of the service
+    # time (upload + transfer j->k + computation + return) and the time
+    # the MU needs to reach the Migration BS
     return max(
         upload_delay(task, R_ij)
         + inter_bs_delay(task, R_jk)
@@ -164,25 +174,23 @@ def migration_cache_miss_delay(
     )
 
 
-# ============================================================
-# Energy model
-# ============================================================
-
+#---------------------------------------------------------
+#Energy model
+#---------------------------------------------------------
 def local_energy(task: Task, epsilon: float) -> float:
-    # Eq. (18)
+    # Eq. (18): local execution energy = cycles * epsilon * F_u^2
     phi_i = epsilon * (task.F_u ** 2)
     return task.omega * phi_i
 
 
 def offloading_energy(task: Task, R_ij: float) -> float:
-    # Eq. (19)
+    # Eq. (19): offloading energy = transmission power * upload time
     return task.P_tx * upload_delay(task, R_ij)
 
 
-# ============================================================
-# Cost functions
-# ============================================================
-
+#---------------------------------------------------------
+#Cost functions: alpha * delay + (1 - alpha) * energy
+#---------------------------------------------------------
 def local_cost(task: Task, alpha: float, epsilon: float) -> float:
     Tl = local_compute_delay(task)
     El = local_energy(task, epsilon)
@@ -209,24 +217,29 @@ def offload_cost_migration_as_written_in_paper(
     alpha: float,
 ) -> float:
     """
-    The paper's Eq. (23) and Algorithm 1 write the same expression for
-    both q_ik = 1 and q_ik = 0. We preserve that structure faithfully.
+    Migration cost as written in Eq. (23) and Algorithm 1 of the paper:
+    the same expression (delay of Eq. 15) is used for both q_ik = 1 and
+    q_ik = 0. It is kept as is for fidelity to the paper.
     """
     Th_ik = migration_cache_hit_delay(task, R_ik, T_w_ij)
     Et_ij = offloading_energy(task, R_ij)
     return alpha * Th_ik + (1 - alpha) * Et_ij
 
 
-# ============================================================
-# Exact evaluation from final decisions Y, Z
-# ============================================================
-
+#---------------------------------------------------------
+#Exact evaluation of the final decisions Y, Z
+#---------------------------------------------------------
 def evaluate_task_delay_energy(
     task: Task,
     system: SystemInputs,
     Y: Dict[Tuple[int, int], int],
     Z: Dict[Tuple[int, int, int], int],
 ) -> Tuple[float, float]:
+    """
+    Computes the actual delay T_i and energy E_i of a task from the
+    decisions Y, Z. Here migration with a cache miss is evaluated with the
+    full Eq. (16).
+    """
     i = task.task_id
     j, k = get_access_and_migration_bs(system.V, i)
 
@@ -244,16 +257,16 @@ def evaluate_task_delay_energy(
     q_ij = system.Q.get((i, j), 0)
     q_ik = system.Q.get((i, k), 0)
 
-    # Local processing
+    # Local execution
     if y_ij == 0:
         T_i = local_compute_delay(task)
         E_i = local_energy(task, system.epsilon)
         return T_i, E_i
 
-    # Offloading energy is always based on upload from MU to access BS
+    # Offloading: the energy is always that of the upload to the Access BS
     E_i = offloading_energy(task, R_ij)
 
-    # No migration
+    # No migration: served by the Access BS
     if z_ijk == 0:
         if q_ij == 1:
             T_i = access_cache_hit_delay(task, R_ij)
@@ -261,7 +274,7 @@ def evaluate_task_delay_energy(
             T_i = access_cache_miss_delay(task, access_server, R_ij)
         return T_i, E_i
 
-    # Migration
+    # With migration: served by the Migration BS
     if q_ik == 1:
         T_i = migration_cache_hit_delay(task, R_ik, T_w_ij)
     else:
@@ -282,6 +295,7 @@ def evaluate_total_cost(
     Y: Dict[Tuple[int, int], int],
     Z: Dict[Tuple[int, int, int], int],
 ) -> AlgorithmOutput:
+    """Cost of each task and total cost for the given decisions Y, Z."""
     D: Dict[int, float] = {}
 
     for task in system.tasks:
@@ -296,43 +310,45 @@ def evaluate_total_cost(
     )
 
 
-# ============================================================
-# CMHA - Algorithm 1
-# ============================================================
-
+#---------------------------------------------------------
+#CMHA - Algorithm 1
+#---------------------------------------------------------
 def cmha(system: SystemInputs) -> AlgorithmOutput:
     """
-    Cache-assist Mobility-aware Heuristic Algorithm (CMHA)
+    Algorithm 1 of the paper (CMHA).
 
-    Practical corrections applied:
-    1) loop control uses decided_tasks < N
-    2) capacity check uses the ACTUAL compute BS
-    3) capacity check uses < instead of <=
+      1. Build the cost matrix G: for each task, one local execution cost
+         (layer 1) and one offloading or migration cost (layer 2).
+      2. Greedy decisions: each time the cheapest available entry of G is
+         chosen, with a capacity check when MEC computation is needed.
+
+    Corrections with respect to the paper's pseudocode:
+      1) the loop continues while decided_tasks < N,
+      2) capacity is checked at the BS that actually executes the task,
+      3) the capacity check uses < instead of <=.
     """
     alpha = system.alpha
 
-    # C_N[j] = current number of tasks actually computed at BS j
+    # C_N[j]: number of tasks assigned for computation to BS j
     C_N: Dict[int, int] = {j: 0 for j in system.servers.keys()}
 
-    # G[(i, bs, layer)] where layer in {1,2}
-    # layer=1 -> local processing cost
-    # layer=2 -> offloading/migration cost
+    # G[(i, bs, layer)]: layer 1 = local execution, layer 2 = offloading/migration
     G: Dict[Tuple[int, int, int], float] = {}
 
     Y: Dict[Tuple[int, int], int] = {}
     Z: Dict[Tuple[int, int, int], int] = {}
     D: Dict[int, float] = {}
 
-    # initialize all matrix entries to +inf
+    # Initially all entries of G are +inf (unavailable options)
     for task in system.tasks:
         i = task.task_id
         for bs_id in system.servers.keys():
             G[(i, bs_id, 1)] = inf
             G[(i, bs_id, 2)] = inf
 
-    # --------------------------------------------------------
-    # Generate cost matrix
-    # --------------------------------------------------------
+    #--------------------------------------------------------
+    #Step 1: build the cost matrix G
+    #--------------------------------------------------------
     for task in system.tasks:
         i = task.task_id
         j, k = get_access_and_migration_bs(system.V, i)
@@ -343,21 +359,21 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
 
         access_server = system.servers[j]
 
-        # layer 1: local processing cost
+        # Layer 1: local execution cost
         G[(i, j, 1)] = local_cost(task, alpha, system.epsilon)
 
-        # layer 2: offloading / migration cost
+        # Layer 2: offloading or migration cost
         if system.Q.get((i, j), 0) == 1:
-            # access BS cache hit
+            # Cache hit at the Access BS: no computation needed
             G[(i, j, 2)] = offload_cost_access_hit(task, R_ij, alpha)
         else:
             Tz_ij = access_cache_miss_delay(task, access_server, R_ij)
 
             if Tz_ij <= T_w_ij:
-                # no migration, access BS computes
+                # Service finishes before the MU leaves: execution at the Access BS
                 G[(i, j, 2)] = offload_cost_access_miss(task, access_server, R_ij, alpha)
             else:
-                # migration BS candidate
+                # The MU will leave earlier: migration candidate at BS k
                 G[(i, k, 2)] = offload_cost_migration_as_written_in_paper(
                     task=task,
                     R_ij=R_ij,
@@ -366,20 +382,22 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
                     alpha=alpha,
                 )
 
-    # --------------------------------------------------------
-    # Make decisions greedily
-    # --------------------------------------------------------
+    #--------------------------------------------------------
+    #Step 2: greedy decisions
+    #--------------------------------------------------------
     undecided = {task.task_id for task in system.tasks}
     decided_tasks = 0
     total_tasks = len(system.tasks)
 
     while decided_tasks < total_tasks:
+        # Cheapest available entry of G
         x, y, layer = min(G, key=G.get)
         g_xyz = G[(x, y, layer)]
 
         if g_xyz == inf:
             break
 
+        # The task has already been decided: the entry is discarded
         if x not in undecided:
             G[(x, y, layer)] = inf
             continue
@@ -387,9 +405,9 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
         task = get_task_by_id(system.tasks, x)
         j, k = get_access_and_migration_bs(system.V, x)
 
-        # ----------------------------------------------------
-        # local processing selected
-        # ----------------------------------------------------
+        #----------------------------------------------------
+        #Local execution selected
+        #----------------------------------------------------
         if layer == 1:
             G[(x, j, 1)] = inf
             G[(x, j, 2)] = inf
@@ -403,12 +421,12 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
             decided_tasks += 1
             continue
 
-        # ----------------------------------------------------
-        # offloading/migration selected
-        # ----------------------------------------------------
+        #----------------------------------------------------
+        #Offloading or migration selected
+        #----------------------------------------------------
         q_xy = system.Q.get((x, y), 0)
 
-        # cache hit branch
+        # Cache hit: no MEC capacity is reserved
         if q_xy == 1:
             D[x] = g_xyz
 
@@ -416,6 +434,7 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
             G[(x, j, 2)] = inf
             G[(x, k, 2)] = inf
 
+            # y == j: served by the Access BS, otherwise migration to k
             if y == j:
                 Y[(x, j)] = 1
                 Z[(x, j, k)] = 0
@@ -427,16 +446,12 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
             decided_tasks += 1
             continue
 
-        # cache miss branch
-        # IMPORTANT FIX:
-        # the actual compute server is the selected BS y
-        # - if y == j: no migration, access BS computes
-        # - if y == k: migration, migration BS computes
+        # Cache miss: the selected BS y executes the task
+        # (y == j: Access BS without migration, y == k: Migration BS)
         compute_bs = y
 
-        # IMPORTANT FIX:
-        # must be <, not <=
         if C_N[compute_bs] < system.servers[compute_bs].C_max:
+            # Free slot on the MEC: the decision is finalized
             C_N[compute_bs] += 1
             D[x] = g_xyz
 
@@ -454,10 +469,11 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
             undecided.remove(x)
             decided_tasks += 1
         else:
-            # reject only this offloading option
+            # The MEC is full: only this option is rejected,
+            # local execution remains available
             G[(x, y, 2)] = inf
 
-    # fallback to local if a task remains undecided
+    # Tasks left without a decision are executed locally
     for task in system.tasks:
         i = task.task_id
         if i in undecided:
@@ -474,11 +490,12 @@ def cmha(system: SystemInputs) -> AlgorithmOutput:
     )
 
 
-# ============================================================
-# ILP / OPTA skeleton
-# ============================================================
+#---------------------------------------------------------
+#ILP / OPTA (skeleton only, not solved)
+#---------------------------------------------------------
 
 def build_ilp_problem(system: SystemInputs):
+    # Description of the paper's ILP: objective, decision variables, constraints C1-C6
     return {
         "objective": "min alpha * sum(T_i) + (1-alpha) * sum(E_i)",
         "decision_variables": ["Y_ij", "Z_ijk"],
@@ -494,19 +511,19 @@ def build_ilp_problem(system: SystemInputs):
 
 
 def solve_with_opta(ilp_problem):
+    # The optimal OPTA solver is not implemented (requires an external solver)
     raise NotImplementedError(
         "OPTA solver not implemented here. Connect this with CPLEX / Gurobi / PuLP."
     )
 
 
-# ============================================================
-# Algorithm 2 support functions
-# ============================================================
-
+#---------------------------------------------------------
+#Stages of Algorithm 2 (placeholders)
+#The inputs V, Q, T_w are provided ready-made by the caller,
+#so these stages simply pass them through.
+#---------------------------------------------------------
 def build_trajectory_prediction_model(mu_history_data):
-    """
-    Placeholder for trajectory prediction model.
-    """
+    # Placeholder for the trajectory prediction model
     return {
         "model": "trajectory_prediction_placeholder",
         "history": mu_history_data,
@@ -522,9 +539,7 @@ def information_gathering(
     prebuilt_Q: Dict[Tuple[int, int], int],
     prebuilt_Tw: Dict[Tuple[int, int], float],
 ):
-    """
-    Placeholder for the information gathering stage.
-    """
+    # Placeholder for information gathering: returns the ready-made inputs
     return {
         "tasks": tasks,
         "servers": servers,
@@ -540,23 +555,18 @@ def execute_decisions(
     Y: Dict[Tuple[int, int], int],
     Z: Dict[Tuple[int, int, int], int],
 ) -> None:
-    """
-    Placeholder for execution stage.
-    """
+    """Placeholder for executing the decisions."""
     pass
 
 
 def transmit_results_to_mu() -> None:
-    """
-    Placeholder for result transmission stage.
-    """
+    """Placeholder for sending the results to the MU."""
     pass
 
 
-# ============================================================
-# Unified Algorithm 2 main
-# ============================================================
-
+#---------------------------------------------------------
+#Algorithm 2 - main flow
+#---------------------------------------------------------
 def mobility_aware_task_offloading_main(
     tasks: List[Task],
     servers: Dict[int, MECServer],
@@ -571,12 +581,8 @@ def mobility_aware_task_offloading_main(
     current_mu_locations=None,
 ) -> AlgorithmOutput:
     """
-    Algorithm 2 main flow:
-    - trajectory prediction
-    - information gathering
-    - choose OPTA or CMHA
-    - execute decisions
-    - transmit results
+    Algorithm 2 of the paper: trajectory prediction -> information gathering
+    -> decision with OPTA or CMHA -> execute decisions -> send results.
     """
     prediction_model = build_trajectory_prediction_model(mu_history_data)
 
@@ -601,6 +607,7 @@ def mobility_aware_task_offloading_main(
         alpha=alpha,
     )
 
+    # Choice of decision method
     if method.upper() == "OPTA":
         ilp_problem = build_ilp_problem(system)
         Y, Z = solve_with_opta(ilp_problem)
@@ -618,9 +625,9 @@ def mobility_aware_task_offloading_main(
     return result
 
 
-# ============================================================
-# Example usage
-# ============================================================
+#---------------------------------------------------------
+#Example run: 2 tasks, 3 BSs
+#---------------------------------------------------------
 
 if __name__ == "__main__":
     tasks = [
@@ -652,13 +659,13 @@ if __name__ == "__main__":
         3: MECServer(bs_id=3, F_total=40e9, C_max=10),
     }
 
-    # For each task i define one access BS and one migration BS
+    # For each task i: (i, Access BS, Migration BS)
     V = {
         (1, 1, 2): 1,
         (2, 2, 3): 1,
     }
 
-    # Cache matrix
+    # Cache: 1 = cache hit of the task at the BS
     Q = {
         (1, 1): 0,
         (1, 2): 1,
@@ -666,13 +673,13 @@ if __name__ == "__main__":
         (2, 3): 0,
     }
 
-    # Residence time
+    # Residence time at the Access BS (s)
     T_w = {
         (1, 1): 0.20,
         (2, 2): 0.30,
     }
 
-    # MU-BS rates
+    # MU-BS transmission rates (bits/s)
     R_mu_bs = {
         (1, 1): 1.0e7,
         (1, 2): 1.0e7,
@@ -680,7 +687,7 @@ if __name__ == "__main__":
         (2, 3): 1.0e7,
     }
 
-    # BS-BS rates
+    # BS-BS transmission rates (bits/s)
     R_bs_bs = {
         (1, 2): 1.0e8,
         (2, 3): 1.0e8,

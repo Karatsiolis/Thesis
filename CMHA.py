@@ -1,33 +1,19 @@
 """
-online_sumo_original_cmha.py
-=============================
+Wrapper that runs the original CMHA algorithm (CMHA_core.py) inside the same
+SUMO scenario as RASMHA, so that both algorithms are compared with the same
+vehicles, MEC servers and tasks.
 
-SUMO wrapper for the ORIGINAL CMHA implementation.
-
-IMPORTANT
----------
-This file does not reimplement or modify CMHA. It dynamically imports
-``algorithm_original.py`` and calls its original ``cmha(system)`` function.
-All CMHA decisions (local execution, access-BS offloading, cache hit/miss,
-migration, greedy cost matrix G, Y/Z decisions, delay-energy objective) are
-therefore produced by the original algorithm code.
-
+CMHA is not modified: the cmha() function of CMHA_core.py is called as is.
 The wrapper only adds:
-  * the same SUMO scenario and task generation used by RasmhaLast_recovery.py,
-  * conversion of each ready RASMHA subtask to the Task input expected by CMHA,
-  * construction of V, Q, T_w, communication rates and device parameters,
-  * execution/evaluation of the unchanged CMHA decision in SUMO,
-  * a terminal report with metrics comparable to RASMHA.
+  - loading of the shared scenario and tasks from RASMHA.py,
+  - conversion of each ready subtask into an independent CMHA input task,
+  - construction of the inputs V, Q, T_w, transmission rates and vehicle
+    parameters,
+  - execution of the CMHA decisions in real SUMO time,
+  - a final report with metrics comparable to those of RASMHA.
 
-The original CMHA is coarse-grained. For a common experimental workload,
-each ready RASMHA subtask is presented externally to CMHA as one independent
-CMHA task. Sequential dependencies are enforced by this wrapper; the CMHA
-function itself is unchanged.
-
-RASMHA recovery is NOT copied into CMHA. The recovery implementation is used
-only as the authoritative source of the common SUMO scenario, configuration,
-vehicles, MEC servers and generated workload. CMHA keeps its original local,
-access-BS and migration decisions so that the baseline is not modified.
+Sequential execution of subtasks is enforced by the wrapper. The RASMHA
+recovery mechanism is NOT carried over to CMHA.
 """
 
 from __future__ import annotations
@@ -42,14 +28,15 @@ import random
 import sys
 
 
-# ============================================================
-# Dynamic loading: original files remain untouched
-# ============================================================
+#---------------------------------------------------------
+#Loading CMHA_core.py and RASMHA.py without modification
+#---------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 def _find_file(candidates: List[str]) -> Path:
+    # Returns the first file that exists in the script's folder
     searched: List[Path] = []
     for filename in candidates:
         path = BASE_DIR / filename
@@ -63,6 +50,7 @@ def _find_file(candidates: List[str]) -> Path:
 
 
 def _load_module(module_name: str, path: Path):
+    # Loads a .py file as a module with the given name
     spec = spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Αδυναμία φόρτωσης module από {path}")
@@ -72,13 +60,12 @@ def _load_module(module_name: str, path: Path):
     return module
 
 
+# The CMHA algorithm (unchanged)
 ALGORITHM_FILE = _find_file([
     "CMHA_core.py"
 ])
 
-# The comparison must use the current recovery-enabled RASMHA implementation
-# as the authoritative source of the shared scenario and workload.  Both names
-# are accepted so the file works before or after removing the download suffix.
+# RASMHA is used as the source of the shared scenario and tasks
 RASMHA_FILE = _find_file([
     "RASMHA.py"
 ])
@@ -88,6 +75,7 @@ RASMHA = _load_module("rasmha_recovery_reference_scenario", RASMHA_FILE)
 
 
 def _validate_rasmha_reference(module) -> None:
+    # Checks that RASMHA.py provides everything the wrapper needs
     required_attributes = [
         "traci",
         "VEHICLES",
@@ -125,6 +113,7 @@ _validate_rasmha_reference(RASMHA)
 
 
 def _sha256(path: Path) -> str:
+    # File SHA256: printed in the report as proof that the code was not changed
     digest = hashlib.sha256()
     with path.open("rb") as file:
         for block in iter(lambda: file.read(1024 * 1024), b""):
@@ -136,12 +125,13 @@ ORIGINAL_ALGORITHM_SHA256 = _sha256(ALGORITHM_FILE)
 RASMHA_REFERENCE_SHA256 = _sha256(RASMHA_FILE)
 
 
-# ============================================================
-# Shared scenario and optional comparison settings
-# ============================================================
+#---------------------------------------------------------
+#Shared scenario from RASMHA and comparison settings
+#---------------------------------------------------------
 
 traci = RASMHA.traci
 
+# Same vehicles, BSs, coverage, V2I rate, MEC servers and tasks as RASMHA
 VEHICLES = RASMHA.VEHICLES
 BS_COORDS = RASMHA.BS_COORDS
 BS_COVERAGE_M = RASMHA.BS_COVERAGE_M
@@ -149,6 +139,7 @@ V2I_RATE = RASMHA.V2I_RATE
 RASMHA_SERVERS = RASMHA.SERVERS
 TASK_TEMPLATES = RASMHA.TASK_TEMPLATES
 
+# CMHA-only parameters ("cmha_comparison" block of config.json)
 COMPARISON_CONFIG = RASMHA.FULL_CONFIG.get("cmha_comparison", {})
 
 ALPHA = float(COMPARISON_CONFIG.get("alpha", 0.5))
@@ -156,6 +147,7 @@ BS_TO_BS_RATE = float(COMPARISON_CONFIG.get("bs_to_bs_rate", 1.0e8))
 CACHE_HIT_RATE = float(COMPARISON_CONFIG.get("cache_hit_rate", 0.0))
 NUM_TASK_TYPES = int(COMPARISON_CONFIG.get("num_task_types", 10))
 
+# Value ranges for the CPU frequency and transmission power of the vehicles
 LOCAL_CPU_MIN, LOCAL_CPU_MAX = COMPARISON_CONFIG.get(
     "local_cpu_range", [0.5e9, 0.8e9]
 )
@@ -168,6 +160,7 @@ LOCAL_CPU_MAX = float(LOCAL_CPU_MAX)
 TX_POWER_MIN = float(TX_POWER_MIN)
 TX_POWER_MAX = float(TX_POWER_MAX)
 
+# Same seed, maximum simulation time and log period as RASMHA
 TASK_SEED = int(RASMHA.TASK_GENERATION_CONFIG.get("seed", 42))
 MAX_SIM_TIME = float(getattr(RASMHA, "MAX_SIM_TIME", 140.0))
 WAIT_LOG_PERIOD = float(getattr(RASMHA, "WAIT_LOG_PERIOD", 5.0))
@@ -178,37 +171,38 @@ if NUM_TASK_TYPES <= 0:
     raise ValueError("num_task_types must be positive")
 
 
-# ============================================================
-# Wrapper-only runtime structures
-# ============================================================
+#---------------------------------------------------------
+#Wrapper data structures
+#---------------------------------------------------------
 
+# Same Task / SubTask structures as RASMHA
 SubTask = RASMHA.SubTask
 Task = RASMHA.Task
 
 
 @dataclass
 class DecisionPlan:
-    """A decision returned by the unchanged CMHA function."""
+    """CMHA decision for one subtask, together with its times and costs."""
 
-    cmha_task_id: int
+    cmha_task_id: int    # id in CMHA: task_id * 1000 + subtask_id
     task_id: int
     subtask_id: int
     av_id: int
 
     access_bs: int
     migration_bs: int
-    compute_bs: Optional[int]
+    compute_bs: Optional[int]    # BS that performs the computation (None for LOCAL)
     mode: str  # LOCAL, ACCESS, MIGRATION
     cache_hit: bool
 
-    residence_time: float
+    residence_time: float        # T_w: residence time at the Access BS
     decision_time: float
 
-    exact_delay: float
-    service_time: float
+    exact_delay: float           # model delay (Eq. 13-16)
+    service_time: float          # net service time, without waiting
     energy: float
-    selected_cost: float
-    evaluated_cost: float
+    selected_cost: float         # cost CMHA used to make the decision
+    evaluated_cost: float        # cost with the exact delay
 
     upload_time: float
     return_time: float
@@ -216,57 +210,68 @@ class DecisionPlan:
 
 @dataclass
 class RunningExecution:
+    """CMHA decision that is currently being executed."""
     plan: DecisionPlan
     start_time: float
     finish_time: float
-    upload_end_time: Optional[float]
-    capacity_bs: Optional[int]
+    upload_end_time: Optional[float]    # diagnostic only, not a failure criterion
+    capacity_bs: Optional[int]          # BS where a slot was reserved (None if not needed)
 
 
 @dataclass
 class OnlineState:
+    """State of the online simulation."""
+    # State of tasks and subtasks
     active_tasks: Dict[int, Task] = field(default_factory=dict)
     completed_tasks: Set[int] = field(default_factory=set)
     failed_tasks: Set[int] = field(default_factory=set)
     completed_subtasks: Set[Tuple[int, int]] = field(default_factory=set)
     decided_subtasks: Set[Tuple[int, int]] = field(default_factory=set)
 
+    # Sequential execution: next subtask and finish time of the previous one
     next_order: Dict[int, int] = field(default_factory=dict)
     last_finish: Dict[int, float] = field(default_factory=dict)
 
+    # Decisions waiting to start and executions in progress
     pending_plans: Dict[Tuple[int, int], DecisionPlan] = field(default_factory=dict)
     running_executions: List[RunningExecution] = field(default_factory=list)
 
+    # Record of decisions per (task_id, subtask_id)
     assignments: Dict[Tuple[int, int], Optional[int]] = field(default_factory=dict)
     access_assignments: Dict[Tuple[int, int], int] = field(default_factory=dict)
     migration_pairs: Dict[Tuple[int, int], Tuple[int, int]] = field(default_factory=dict)
     execution_modes: Dict[Tuple[int, int], str] = field(default_factory=dict)
     cache_hits: Dict[Tuple[int, int], bool] = field(default_factory=dict)
 
+    # Delays, energy and costs per subtask
     delays: Dict[Tuple[int, int], float] = field(default_factory=dict)
     service_times: Dict[Tuple[int, int], float] = field(default_factory=dict)
     energies: Dict[Tuple[int, int], float] = field(default_factory=dict)
     selected_costs: Dict[Tuple[int, int], float] = field(default_factory=dict)
     evaluated_costs: Dict[Tuple[int, int], float] = field(default_factory=dict)
 
+    # Start/finish times and total delay per task
     start_times: Dict[Tuple[int, int], float] = field(default_factory=dict)
     finish_times: Dict[Tuple[int, int], float] = field(default_factory=dict)
     task_delays: Dict[int, float] = field(default_factory=dict)
 
+    # Failures
     failure_reasons: Dict[int, str] = field(default_factory=dict)
     failure_times: Dict[int, float] = field(default_factory=dict)
     failed_subtasks: List[Tuple[int, int]] = field(default_factory=list)
 
+    # Current number of tasks on each MEC (capacity check)
     mec_load: Dict[int, int] = field(default_factory=dict)
+    # So that waiting messages are not printed at every step
     last_wait_log: Dict[Tuple[int, int], float] = field(default_factory=dict)
 
 
-# ============================================================
-# Deterministic device and cache inputs for original CMHA
-# ============================================================
-
+#---------------------------------------------------------
+#Fixed (deterministic) vehicle and cache parameters
+#---------------------------------------------------------
 
 def _stable_rng(*values: int) -> random.Random:
+    # Generator whose seed depends on the values: same results on every run
     seed = TASK_SEED
     for value in values:
         seed = (seed * 1_000_003 + int(value) * 97_409) & 0xFFFFFFFFFFFF
@@ -274,19 +279,22 @@ def _stable_rng(*values: int) -> random.Random:
 
 
 def local_cpu_for_av(av_id: int) -> float:
+    # CPU frequency of the vehicle (F_u)
     return _stable_rng(11, av_id).uniform(LOCAL_CPU_MIN, LOCAL_CPU_MAX)
 
 
 def tx_power_for_av(av_id: int) -> float:
+    # Transmission power of the vehicle (P_tx)
     return _stable_rng(17, av_id).uniform(TX_POWER_MIN, TX_POWER_MAX)
 
 
 def task_type_for_subtask(task_id: int, subtask_id: int) -> int:
+    # Task type of the subtask (used for the cache check)
     return ((task_id * 37 + subtask_id * 13) % NUM_TASK_TYPES) + 1
 
 
 def build_cache_catalog() -> Dict[Tuple[int, int], bool]:
-    """Deterministic cache state indexed by (BS, task_type)."""
+    """Which task types are cached at each BS, with probability CACHE_HIT_RATE."""
     catalog: Dict[Tuple[int, int], bool] = {}
     for bs_id in sorted(RASMHA_SERVERS):
         for task_type in range(1, NUM_TASK_TYPES + 1):
@@ -298,9 +306,9 @@ def build_cache_catalog() -> Dict[Tuple[int, int], bool]:
 CACHE_CATALOG = build_cache_catalog()
 
 
-# ============================================================
-# Route geometry used only to construct V and T_w inputs
-# ============================================================
+#---------------------------------------------------------
+#Route geometry: computing the inputs V and T_w
+#---------------------------------------------------------
 
 
 def compute_route_coverage_intervals(
@@ -308,7 +316,10 @@ def compute_route_coverage_intervals(
     bs_pos: Tuple[float, float],
     radius: float,
 ) -> List[Tuple[float, float]]:
-    """Route-distance intervals lying inside a circular BS coverage area."""
+    """
+    Parts of the route that lie inside the coverage of a BS,
+    as distance intervals (m) from the start of the route.
+    """
     cumulative = RASMHA.route_cumulative_distances(route_polyline)
     raw: List[Tuple[float, float]] = []
     cx, cy = bs_pos
@@ -322,6 +333,8 @@ def compute_route_coverage_intervals(
         if segment_length <= 1e-12:
             continue
 
+        # Intersection of the segment with the coverage circle:
+        # solution of a quadratic equation in t (0 = segment start, 1 = segment end)
         fx = ax - cx
         fy = ay - cy
         a = dx * dx + dy * dy
@@ -341,6 +354,8 @@ def compute_route_coverage_intervals(
 
         cuts = sorted(set(round(value, 12) for value in cuts))
 
+        # The intersection points split the segment into pieces; the pieces
+        # whose midpoint lies inside the coverage are kept
         for left, right in zip(cuts[:-1], cuts[1:]):
             midpoint = (left + right) / 2.0
             mx = ax + midpoint * dx
@@ -355,6 +370,7 @@ def compute_route_coverage_intervals(
     if not raw:
         return []
 
+    # Merge consecutive or overlapping intervals
     raw.sort()
     merged: List[List[float]] = []
     for start, end in raw:
@@ -370,6 +386,7 @@ def current_interval(
     intervals: List[Tuple[float, float]],
     route_distance: float,
 ) -> Optional[Tuple[float, float]]:
+    # The coverage interval the vehicle is currently in (or None)
     for start, end in intervals:
         if start - 1e-3 <= route_distance <= end + 1e-3:
             return start, end
@@ -380,6 +397,7 @@ def next_interval(
     intervals: List[Tuple[float, float]],
     route_distance: float,
 ) -> Optional[Tuple[float, float]]:
+    # The first coverage interval the vehicle has not yet passed
     for start, end in intervals:
         if end > route_distance + 1e-3:
             return start, end
@@ -391,6 +409,7 @@ def select_access_bs(
     reachable_bs: List[int],
     bs_xy: Dict[int, Tuple[float, float]],
 ) -> Optional[int]:
+    # Access BS: the nearest of the BSs currently covering the vehicle
     if not reachable_bs:
         return None
     return min(reachable_bs, key=lambda bs: RASMHA.dist(av_pos, bs_xy[bs]))
@@ -403,6 +422,8 @@ def find_migration_bs(
     passed_bs: Set[int],
     intervals_by_bs: Dict[int, List[Tuple[float, float]]],
 ) -> Optional[int]:
+    # Migration BS: the next BS the vehicle will meet on its route,
+    # excluding the Access BS and those it has already passed
     future: List[Tuple[float, int]] = []
     for bs_id in route_candidates:
         if bs_id == access_bs or bs_id in passed_bs:
@@ -427,6 +448,8 @@ def residence_time_input(
     avg_speed: float,
     intervals_by_bs: Dict[int, List[Tuple[float, float]]],
 ) -> float:
+    # T_w: estimated time until the vehicle leaves the Access BS
+    # (remaining distance inside the coverage / average speed)
     interval = current_interval(
         intervals_by_bs.get(access_bs, []),
         current_route_distance,
@@ -437,12 +460,13 @@ def residence_time_input(
     return max(0.0, exit_distance - current_route_distance) / max(avg_speed, 1e-9)
 
 
-# ============================================================
-# Unchanged CMHA invocation
-# ============================================================
+#------------------------------------------------------------
+#Calling the unchanged CMHA
+#------------------------------------------------------------
 
 
 def original_servers() -> Dict[int, object]:
+    # The scenario's MEC servers in the form expected by CMHA_core
     return {
         bs_id: CMHA.MECServer(
             bs_id=bs_id,
@@ -457,8 +481,9 @@ def build_and_run_original_cmha(
     candidates: List[Tuple[Task, SubTask, int, int, float]],
 ) -> List[DecisionPlan]:
     """
-    Build the inputs expected by algorithm_original.py and call its cmha()
-    exactly as implemented. No CMHA condition or cost formula is duplicated here.
+    Builds the CMHA inputs for a batch of ready subtasks, calls cmha() of
+    CMHA_core.py as is and converts its decisions into DecisionPlan objects.
+    No CMHA rule or cost formula is duplicated here.
     """
     if not candidates:
         return []
@@ -473,6 +498,7 @@ def build_and_run_original_cmha(
 
     servers = original_servers()
 
+    # Each subtask becomes one independent CMHA task
     for parent_task, subtask, access_bs, migration_bs, residence in candidates:
         cmha_task_id = parent_task.task_id * 1000 + subtask.subtask_id
         task_type = task_type_for_subtask(parent_task.task_id, subtask.subtask_id)
@@ -483,6 +509,7 @@ def build_and_run_original_cmha(
             D_out=subtask.D_out,
             omega=subtask.omega,
             task_type=task_type,
+            # CMHA tau = subtask deadline in relative time
             tau=max(0.0, subtask.deadline - parent_task.generated_at),
             F_u=local_cpu_for_av(parent_task.av_id),
             P_tx=tx_power_for_av(parent_task.av_id),
@@ -496,6 +523,7 @@ def build_and_run_original_cmha(
             residence,
         )
 
+        # CMHA inputs: V (Access/Migration BS), Q (cache), T_w, transmission rates
         V[(cmha_task_id, access_bs, migration_bs)] = 1
         Q[(cmha_task_id, access_bs)] = int(
             CACHE_CATALOG[(access_bs, task_type)]
@@ -519,7 +547,7 @@ def build_and_run_original_cmha(
         alpha=ALPHA,
     )
 
-    # This is the original function from the uploaded algorithm file.
+    # Call the original cmha() of CMHA_core.py
     result = CMHA.cmha(system)
 
     plans: List[DecisionPlan] = []
@@ -527,6 +555,7 @@ def build_and_run_original_cmha(
         cmha_id = cmha_task.task_id
         parent_task, subtask, access_bs, migration_bs, residence = metadata[cmha_id]
 
+        # Convert Y, Z into an execution mode: LOCAL, ACCESS or MIGRATION
         y = result.Y.get((cmha_id, access_bs), 0)
         z = result.Z.get((cmha_id, access_bs, migration_bs), 0)
 
@@ -543,6 +572,7 @@ def build_and_run_original_cmha(
             compute_bs = access_bs
             cache_hit = bool(Q.get((cmha_id, access_bs), 0))
 
+        # Exact delay and energy of the decision from CMHA_core
         exact_delay, energy = CMHA.evaluate_task_delay_energy(
             cmha_task,
             system,
@@ -553,6 +583,8 @@ def build_and_run_original_cmha(
         upload = CMHA.upload_delay(cmha_task, V2I_RATE)
         returned = CMHA.return_delay(cmha_task, V2I_RATE)
 
+        # Net service time for each execution mode
+        # (without waiting to enter the Migration BS)
         if mode == "LOCAL":
             service = CMHA.local_compute_delay(cmha_task)
         elif mode == "ACCESS" and cache_hit:
@@ -563,9 +595,9 @@ def build_and_run_original_cmha(
                 + CMHA.mec_compute_delay(cmha_task, servers[access_bs])
                 + returned
             )
-        elif cache_hit:
+        elif cache_hit:  # MIGRATION with cache hit
             service = returned
-        else:
+        else:  # MIGRATION with cache miss
             service = (
                 upload
                 + CMHA.inter_bs_delay(cmha_task, BS_TO_BS_RATE)
@@ -573,6 +605,7 @@ def build_and_run_original_cmha(
                 + returned
             )
 
+        # Cost with the exact delay, for comparison with the decision cost
         evaluated_cost = ALPHA * exact_delay + (1.0 - ALPHA) * energy
 
         plans.append(DecisionPlan(
@@ -586,7 +619,7 @@ def build_and_run_original_cmha(
             mode=mode,
             cache_hit=cache_hit,
             residence_time=residence,
-            decision_time=0.0,  # assigned by caller
+            decision_time=0.0,  # set by the caller
             exact_delay=exact_delay,
             service_time=service,
             energy=energy,
@@ -599,10 +632,9 @@ def build_and_run_original_cmha(
     return plans
 
 
-# ============================================================
-# Execution of CMHA decisions in real SUMO time
-# ============================================================
-
+#------------------------------------------------------------
+#Executing CMHA decisions in real SUMO time
+#---------------------------------------------------------
 
 def get_subtask(task: Task, subtask_id: int) -> SubTask:
     for subtask in task.subtasks:
@@ -617,6 +649,10 @@ def fail_task(
     current_time: float,
     reason: str,
 ) -> None:
+    """
+    Marks the task as failed, cancels its waiting or running decisions
+    and frees the MEC slots.
+    """
     if task.task_id in state.failed_tasks or task.task_id in state.completed_tasks:
         return
 
@@ -624,10 +660,12 @@ def fail_task(
     state.failure_reasons[task.task_id] = reason
     state.failure_times[task.task_id] = current_time
 
+    # Remove decisions that have not started
     for key in list(state.pending_plans):
         if key[0] == task.task_id:
             state.pending_plans.pop(key, None)
 
+    # Cancel executions in progress and free the MEC slot
     for execution in list(state.running_executions):
         if execution.plan.task_id != task.task_id:
             continue
@@ -638,6 +676,7 @@ def fail_task(
                 state.mec_load.get(execution.capacity_bs, 0) - 1,
             )
 
+    # The current and all following subtasks are recorded as failed
     current_order = state.next_order.get(task.task_id, 0)
     for subtask in sorted(task.subtasks, key=lambda item: item.order):
         if subtask.order >= current_order:
@@ -652,6 +691,10 @@ def complete_execution(
     execution: RunningExecution,
     state: OnlineState,
 ) -> None:
+    """
+    Completes a subtask: frees the MEC slot, moves on to the next subtask
+    and, if it was the last one, completes the task.
+    """
     plan = execution.plan
     task = state.active_tasks[plan.task_id]
     key = (plan.task_id, plan.subtask_id)
@@ -662,6 +705,7 @@ def complete_execution(
             state.mec_load.get(execution.capacity_bs, 0) - 1,
         )
 
+    # Record completion and move on to the next subtask
     state.completed_subtasks.add(key)
     state.finish_times[key] = execution.finish_time
     state.last_finish[plan.task_id] = execution.finish_time
@@ -672,6 +716,7 @@ def complete_execution(
         f"SubTask {plan.subtask_id} ολοκληρώθηκε με CMHA mode={plan.mode}"
     )
 
+    # If there is no next subtask, the task is complete
     next_subtask = RASMHA.get_next_subtask(
         task,
         state.next_order[plan.task_id],
@@ -687,6 +732,8 @@ def complete_execution(
 
 
 def plan_requires_capacity(plan: DecisionPlan) -> bool:
+    # A MEC slot is needed only when computation is done on a MEC
+    # (not for LOCAL and not for a cache hit)
     return (
         plan.compute_bs is not None
         and not plan.cache_hit
@@ -699,6 +746,10 @@ def start_pending_plans(
     state: OnlineState,
     current_reachable: Dict[int, List[int]],
 ) -> None:
+    """
+    Starts the waiting CMHA decisions, as long as deadline/tau still hold,
+    the vehicle is covered by the Access BS and MEC capacity is available.
+    """
     for key, plan in list(state.pending_plans.items()):
         if plan.task_id in state.failed_tasks or plan.task_id in state.completed_tasks:
             state.pending_plans.pop(key, None)
@@ -707,6 +758,7 @@ def start_pending_plans(
         task = state.active_tasks[plan.task_id]
         subtask = get_subtask(task, plan.subtask_id)
 
+        # Check the subtask deadline and the total tau of the task
         if current_time > subtask.deadline:
             fail_task(task, state, current_time, "χάθηκε το subtask deadline πριν την εκτέλεση")
             continue
@@ -714,6 +766,7 @@ def start_pending_plans(
             fail_task(task, state, current_time, "χάθηκε το συνολικό tau πριν την εκτέλεση")
             continue
 
+        # For offloading the vehicle must still be inside the Access BS
         if plan.mode in {"ACCESS", "MIGRATION"}:
             if plan.access_bs not in current_reachable.get(plan.av_id, []):
                 fail_task(
@@ -727,6 +780,7 @@ def start_pending_plans(
                 )
                 continue
 
+        # If the MEC is full, the decision waits without being changed
         capacity_bs: Optional[int] = None
         if plan_requires_capacity(plan):
             assert plan.compute_bs is not None
@@ -741,19 +795,20 @@ def start_pending_plans(
                         f"BS{plan.compute_bs}; η απόφαση CMHA παραμένει αμετάβλητη"
                     )
                 continue
+            # Reserve a slot on the MEC
             capacity_bs = plan.compute_bs
             state.mec_load[capacity_bs] = state.mec_load.get(capacity_bs, 0) + 1
 
+        # Expected completion based on the model delay
         finish_time = current_time + plan.exact_delay
 
-        # Καταγράφεται μόνο ως διαγνωστική χρονοσφραγίδα (πότε ολοκληρώνεται το
-        # T^t_ij της Εξ. 7). Δεν αποτελεί κριτήριο αποτυχίας: το άρθρο δεν
-        # ορίζει τέτοιο κριτήριο - βλ. αναλυτικό σχόλιο στην
-        # update_running_executions().
+        # Upload end time: kept for diagnostics only, it is not a failure
+        # criterion (see the note in update_running_executions)
         upload_end: Optional[float] = None
         if plan.mode == "MIGRATION" and not plan.cache_hit:
             upload_end = current_time + plan.upload_time
 
+        # The decision moves from waiting to execution
         execution = RunningExecution(
             plan=plan,
             start_time=current_time,
@@ -781,6 +836,10 @@ def update_running_executions(
     state: OnlineState,
     current_reachable: Dict[int, List[int]],
 ) -> None:
+    """
+    Checks the executions in progress and completes those that have reached
+    their finish time, provided the vehicle can receive the result.
+    """
     for execution in list(state.running_executions):
         plan = execution.plan
         task = state.active_tasks[plan.task_id]
@@ -790,6 +849,7 @@ def update_running_executions(
             state.running_executions.remove(execution)
             continue
 
+        # Check deadline/tau during execution
         if current_time > subtask.deadline or current_time > task.generated_at + task.tau:
             fail_task(
                 task,
@@ -799,31 +859,18 @@ def update_running_executions(
             )
             continue
 
-        # ΣΗΜΕΙΩΣΗ ΠΙΣΤΟΤΗΤΑΣ ΣΤΟ ΑΡΘΡΟ (Lai et al., Ad Hoc Networks 156/2024):
-        #
-        # Εδώ υπήρχε έλεγχος που ακύρωνε ένα MIGRATION αν το AV είχε βγει από
-        # την κάλυψη του Access BS τη στιγμή ολοκλήρωσης του upload. Ο έλεγχος
-        # αυτός ΔΕΝ προβλέπεται πουθενά στο μοντέλο του άρθρου και μάλιστα
-        # αντιβαίνει στη λογική του:
-        #
-        #   - Ο περιορισμός C4 (§3.6.3) ορίζει ότι το migration ενεργοποιείται
-        #     ΑΚΡΙΒΩΣ όταν T^z_ij >= T^w_ij, δηλαδή όταν ο χρόνος επεξεργασίας
-        #     στο Access BS υπερβαίνει τον χρόνο παραμονής του MU εκεί. Το
-        #     upload (T^t_ij) είναι συστατικό του T^z_ij. Άρα το άρθρο ΠΕΡΙΜΕΝΕΙ
-        #     το όχημα να φεύγει από το Access BS κατά τη διάρκεια της
-        #     διεκπεραίωσης· αυτός ακριβώς είναι ο λόγος ύπαρξης του migration.
-        #
-        #   - Η Εξ. (16) ήδη ενσωματώνει πλήρως αυτή την κινητικότητα:
-        #     T^h_ik = max{ T^t_ij + T^t_jk + T^c_ik + T^r_ik , T^w_ij + T^r_ik }
-        #     Ο δεύτερος όρος δηλώνει ρητά ότι το MU λαμβάνει το αποτέλεσμα
-        #     μόνο αφού εισέλθει στην κάλυψη του Migration BS.
-        #
-        # Επομένως η μοναδική συνθήκη επιτυχίας που ορίζει το άρθρο για το
-        # migration είναι η κάλυψη στο Migration BS τη στιγμή επιστροφής του
-        # αποτελέσματος - κάτι που ελέγχεται παρακάτω. Ο έλεγχος αφαιρέθηκε.
+        # Fidelity to the paper (Lai et al., 2024): it is NOT checked whether
+        # the vehicle left the Access BS during the upload. In CMHA, migration
+        # is chosen exactly when the vehicle will leave the Access BS before
+        # the service is complete (constraint C4), and Eq. (16) already
+        # accounts for this movement. The only success condition for migration
+        # is coverage by the Migration BS at the moment the result is returned.
+
+        # The execution has not finished yet
         if current_time < execution.finish_time:
             continue
 
+        # ACCESS: the result is returned only if the vehicle is still inside the Access BS
         if plan.mode == "ACCESS":
             if plan.access_bs not in current_reachable.get(plan.av_id, []):
                 fail_task(
@@ -838,46 +885,42 @@ def update_running_executions(
                 continue
 
         elif plan.mode == "MIGRATION":
-            # ΣΗΜΕΙΩΣΗ ΠΙΣΤΟΤΗΤΑΣ ΣΤΟ ΑΡΘΡΟ (§3.5.2, περιπτώσεις 4 & 5):
-            #
-            # "since the MU can only receive the task computation result when
-            #  entering the Migration BS service coverage, the total delay is
-            #  the sum of the computation result return delay and the residence
-            #  time of MU i in Access BS" -> Εξ. (15) και Εξ. (16).
-            #
-            # Το άρθρο δηλαδή ΑΝΑΜΕΝΕΙ την είσοδο του MU στην κάλυψη του
-            # Migration BS· δεν ακυρώνει την εργασία. Ο δεύτερος όρος του max
-            # στην Εξ. (16), T^w_ij + T^r_ik, είναι ακριβώς αυτή η αναμονή.
-            #
-            # Στο μοντέλο του άρθρου (Fig. 1) οι κυψέλες είναι εφαπτόμενες, άρα
-            # "έξοδος από Access BS" == "είσοδος σε Migration BS" και ο όρος
-            # T^w_ij αρκεί. Στο σενάριο SUMO της παρούσας εργασίας οι καλύψεις
-            # ΔΕΝ είναι συνεχείς (υπάρχει κενό μεταξύ BS2 και BS3), οπότε η
-            # πραγματική στιγμή εισόδου είναι η πιστή γενίκευση του T^w_ij.
+            # MIGRATION: according to the paper (§3.5.2, Eq. 15-16) the vehicle
+            # receives the result when it enters the coverage of the Migration BS.
+            # So the task is not cancelled but waits for the entry. In the paper
+            # the cells are adjacent, while the SUMO scenario has coverage gaps
+            # (e.g. between BS2 and BS3), so the actual entry time is used in
+            # place of T_w.
             if plan.migration_bs not in current_reachable.get(plan.av_id, []):
                 continue
 
-            # Πραγματική στιγμή παράδοσης: γενίκευση της Εξ. (16) με τον
-            # μετρημένο χρόνο εισόδου αντί του υποτιθέμενου T^w_ij.
+            # Delivery happens at the actual entry time, if it is later than
+            # the expected finish time
             if current_time > execution.finish_time:
                 execution.finish_time = current_time
 
+        # Subtask completed successfully
         state.running_executions.remove(execution)
         complete_execution(execution, state)
 
 
-# ============================================================
-# Main SUMO run
-# ============================================================
-
+#---------------------------------------------------------
+#Main SUMO simulation
+#---------------------------------------------------------
 
 def run_online_sumo_original_cmha() -> OnlineState:
+    """
+    Online SUMO simulation with the original CMHA. At each step: coverage
+    update, execution checks, vehicle arrivals, task generation, a CMHA call
+    for the ready subtasks and start of the decisions.
+    """
     print("-- Online SUMO wrapper + ORIGINAL CMHA ----------------------------------")
     print(f"Original algorithm file  : {ALGORITHM_FILE.name}")
     print(f"Original algorithm SHA256: {ORIGINAL_ALGORITHM_SHA256}")
     print(f"RASMHA reference file    : {RASMHA_FILE.name}")
     print(f"RASMHA reference SHA256  : {RASMHA_REFERENCE_SHA256}")
 
+    # Start SUMO and insert the vehicles with the same procedure as RASMHA
     (
         bs_xy,
         av_edges,
@@ -886,6 +929,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
         travel_times,
     ) = RASMHA.prepare_sumo()
 
+    # Average speed of each vehicle and coverage intervals of each BS on its route
     average_speeds: Dict[int, float] = {}
     coverage_intervals: Dict[int, Dict[int, List[Tuple[float, float]]]] = {}
 
@@ -905,14 +949,18 @@ def run_online_sumo_original_cmha() -> OnlineState:
     generated_task_ids: Set[int] = set()
     target_vehicles = {f"av{av_id}" for av_id in av_edges}
 
+    # Whether each vehicle is inside each BS (for entry/exit messages)
     in_range: Dict[int, Dict[int, bool]] = {
         av_id: {bs_id: False for bs_id in BS_COORDS}
         for av_id in av_edges
     }
+    # BSs each vehicle has already passed
     passed_bs: Dict[int, Set[int]] = {av_id: set() for av_id in av_edges}
 
     try:
         while traci.simulation.getTime() <= MAX_SIM_TIME:
+            # Stop when all vehicles have arrived, all tasks have been generated
+            # and no decision is waiting or running
             all_generated = len(generated_task_ids) == len(TASK_TEMPLATES)
             if (
                 not target_vehicles
@@ -925,6 +973,9 @@ def run_online_sumo_original_cmha() -> OnlineState:
             traci.simulationStep()
             current_time = traci.simulation.getTime()
 
+            #----------------------------------------------------
+            #1. Current coverage: which BSs cover each vehicle
+            #----------------------------------------------------
             current_reachable: Dict[int, List[int]] = {
                 av_id: [] for av_id in av_edges
             }
@@ -944,6 +995,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
                     if inside:
                         current_reachable[av_id].append(bs_id)
 
+                    # Log entry into / exit from the BS coverage
                     if inside and not in_range[av_id][bs_id]:
                         in_range[av_id][bs_id] = True
                         print(f"  t={current_time:.1f}s  AV{av_id} -> εντός BS{bs_id}")
@@ -952,8 +1004,14 @@ def run_online_sumo_original_cmha() -> OnlineState:
                         passed_bs[av_id].add(bs_id)
                         print(f"  t={current_time:.1f}s  AV{av_id} -> εκτός BS{bs_id}")
 
+            #----------------------------------------------------
+            #2. Check executions in progress
+            #----------------------------------------------------
             update_running_executions(current_time, state, current_reachable)
 
+            #----------------------------------------------------
+            #3. Vehicle arrivals: their unfinished tasks fail
+            #----------------------------------------------------
             arrived = set(traci.simulation.getArrivedIDList())
             for vehicle_id in list(target_vehicles):
                 if vehicle_id not in arrived:
@@ -978,7 +1036,9 @@ def run_online_sumo_original_cmha() -> OnlineState:
                             ),
                         )
 
-            # Exactly the same templates and creation times as RasmhaLast_recovery.py.
+            #----------------------------------------------------
+            #4. Task generation with the same templates and times as RASMHA
+            #----------------------------------------------------
             for template in TASK_TEMPLATES:
                 if template.task_id in generated_task_ids:
                     continue
@@ -999,20 +1059,26 @@ def run_online_sumo_original_cmha() -> OnlineState:
                         f"{task.task_id} από AV{task.av_id}"
                     )
                 else:
+                    # The vehicle no longer exists: the task is not generated
                     generated_task_ids.add(template.task_id)
                     print(
                         f"  t={current_time:.1f}s  Task {template.task_id} δεν "
                         f"δημιουργήθηκε γιατί το AV{template.av_id} δεν υπάρχει"
                     )
 
-            # Start decisions already returned by CMHA but waiting for capacity.
+            #----------------------------------------------------
+            #5. Start decisions that were waiting for MEC capacity
+            #----------------------------------------------------
             start_pending_plans(current_time, state, current_reachable)
 
-            # Build one batch of all ready, undecided subtasks and invoke the
-            # original cmha() once for that batch. The function is untouched.
+            #----------------------------------------------------
+            #6. Collect the ready subtasks without a decision into one batch,
+            #   for a single CMHA call
+            #----------------------------------------------------
             batch_inputs: List[Tuple[Task, SubTask, int, int, float]] = []
 
             for task_id, task in list(state.active_tasks.items()):
+                # Skip if the task has finished or one of its subtasks is already running/waiting
                 if task_id in state.completed_tasks or task_id in state.failed_tasks:
                     continue
                 if any(execution.plan.task_id == task_id for execution in state.running_executions):
@@ -1024,6 +1090,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
                 if subtask is None:
                     continue
 
+                # The subtask must not have a decision yet and must be ready in time
                 key = (task_id, subtask.subtask_id)
                 if key in state.decided_subtasks:
                     continue
@@ -1032,6 +1099,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
                 if current_time < state.last_finish.get(task_id, task.generated_at):
                     continue
 
+                # Check deadline/tau
                 if current_time > subtask.deadline:
                     fail_task(task, state, current_time, "χάθηκε το subtask deadline")
                     continue
@@ -1039,6 +1107,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
                     fail_task(task, state, current_time, "χάθηκε το συνολικό tau")
                     continue
 
+                # Without coverage from any BS the subtask waits
                 av_id = task.av_id
                 reachable = current_reachable.get(av_id, [])
                 if not reachable or av_id not in av_positions:
@@ -1051,6 +1120,7 @@ def run_online_sumo_original_cmha() -> OnlineState:
                         )
                     continue
 
+                # CMHA inputs: Access BS, Migration BS and T_w
                 access_bs = select_access_bs(av_positions[av_id], reachable, bs_xy)
                 if access_bs is None:
                     continue
@@ -1074,9 +1144,9 @@ def run_online_sumo_original_cmha() -> OnlineState:
                     coverage_intervals[av_id],
                 )
 
-                # The original model requires one migration BS. At the final BS,
-                # no future migration exists. We use k=j and infinite T_w only as
-                # an input encoding that disables migration; cmha() is unchanged.
+                # CMHA requires a Migration BS. If there is no next BS on the
+                # route, k = j and T_w = inf are set so that migration is not
+                # chosen. cmha() itself is unchanged.
                 if migration_bs is None:
                     migration_bs = access_bs
                     residence = inf
@@ -1089,6 +1159,9 @@ def run_online_sumo_original_cmha() -> OnlineState:
                     residence,
                 ))
 
+            #----------------------------------------------------
+            #7. Call CMHA for the batch and record the decisions
+            #----------------------------------------------------
             plans = build_and_run_original_cmha(batch_inputs)
             for plan in plans:
                 key = (plan.task_id, plan.subtask_id)
@@ -1115,8 +1188,12 @@ def run_online_sumo_original_cmha() -> OnlineState:
                 state.selected_costs[key] = plan.selected_cost
                 state.evaluated_costs[key] = plan.evaluated_cost
 
+            #----------------------------------------------------
+            #8. Start the new decisions immediately where possible
+            #----------------------------------------------------
             start_pending_plans(current_time, state, current_reachable)
 
+        # End of simulation: anything not completed is considered failed
         for task in list(state.active_tasks.values()):
             if (
                 task.task_id not in state.completed_tasks
@@ -1135,12 +1212,12 @@ def run_online_sumo_original_cmha() -> OnlineState:
     return state
 
 
-# ============================================================
-# Comparable terminal report
-# ============================================================
-
+#---------------------------------------------------------
+#Final report (same format as RASMHA)
+#---------------------------------------------------------
 
 def _median(values: List[float]) -> float:
+    # Median of a list of values
     ordered = sorted(values)
     count = len(ordered)
     if count == 0:
@@ -1152,6 +1229,7 @@ def _median(values: List[float]) -> float:
 
 
 def print_final_report(state: OnlineState) -> None:
+    """Prints the final report. It affects only the output, not the results."""
     width = 132
     print("\n" + "=" * width)
     print("ORIGINAL CMHA + SUMO - FINAL SIMULATION REPORT".center(width))
@@ -1168,6 +1246,7 @@ def print_final_report(state: OnlineState) -> None:
     failed = sorted(state.failed_tasks)
     delays = [state.task_delays[task_id] for task_id in completed]
 
+    # Simulation configuration
     print("\nSIMULATION CONFIGURATION")
     print("-" * width)
     print(f"{'Algorithm source':<34}: {ALGORITHM_FILE.name}")
@@ -1182,6 +1261,7 @@ def print_final_report(state: OnlineState) -> None:
     print(f"{'CMHA alpha':<34}: {ALPHA:.2f}")
     print(f"{'Cache hit rate input':<34}: {CACHE_HIT_RATE * 100:.2f} %")
 
+    # Results per task
     print("\nTASK RESULTS")
     print("-" * width)
     header = (
@@ -1197,6 +1277,7 @@ def print_final_report(state: OnlineState) -> None:
         sequence: List[str] = []
         service = 0.0
 
+        # Execution sequence: LOCAL, executing BS or Access>Migration pair
         for subtask in ordered_subtasks:
             key = (task.task_id, subtask.subtask_id)
             mode = state.execution_modes.get(key)
@@ -1214,6 +1295,7 @@ def print_final_report(state: OnlineState) -> None:
 
         sequence_text = " -> ".join(sequence)
         if task.task_id in state.completed_tasks:
+            # Waiting = E2E delay - net service time
             e2e = state.task_delays[task.task_id]
             end = max(
                 state.finish_times[(task.task_id, subtask.subtask_id)]
@@ -1241,6 +1323,7 @@ def print_final_report(state: OnlineState) -> None:
             f"{service_text:>9}  {e2e_text:>10}  {task.tau:>8.2f}  {status:<18}"
         )
 
+    # Overall results: success rates and E2E delays
     print("\nSYSTEM SUMMARY")
     print("-" * width)
     completed_count = len(completed)
@@ -1268,6 +1351,7 @@ def print_final_report(state: OnlineState) -> None:
         ):
             print(f"{label:<34}: -")
 
+    # CMHA metrics: execution modes, cache hits, energy and costs
     print("\nORIGINAL CMHA METRICS")
     print("-" * width)
     modes = list(state.execution_modes.values())
@@ -1280,6 +1364,7 @@ def print_final_report(state: OnlineState) -> None:
     print(f"{'CMHA selected total cost':<34}: {sum(state.selected_costs.values()):.6f}")
     print(f"{'Exact evaluated total cost':<34}: {sum(state.evaluated_costs.values()):.6f}")
 
+    # Number of subtasks assigned to each MEC (cumulative)
     print("\nMEC UTILIZATION")
     print("-" * width)
     counts = {bs_id: 0 for bs_id in sorted(RASMHA_SERVERS)}
@@ -1295,6 +1380,7 @@ def print_final_report(state: OnlineState) -> None:
     print("-" * 52)
     print(f"{'Total':<8}{total_assignments:>20}{100.0 if total_assignments else 0.0:>23.2f}%")
 
+    # Failure analysis: subtask, time and reason
     print("\nFAILURE ANALYSIS")
     print("-" * width)
     if not failed:
