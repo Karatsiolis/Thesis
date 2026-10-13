@@ -1,4 +1,4 @@
-# RASMHA — Route-Aware MEC Task Offloading for Autonomous Vehicles
+# RASMHA — Route-Aware Subtask MEC Heuristic Algorithm
 
 This repository contains the implementation and experimental evaluation of **RASMHA**, a route-aware and deadline-aware mechanism for offloading computation tasks from autonomous vehicles (AVs) to **Multi-access Edge Computing (MEC)** servers over V2I links.
 
